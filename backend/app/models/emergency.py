@@ -10,7 +10,6 @@ class EmergencyAlert(BaseModel):
     __tablename__ = "emergency_alerts"
     
     alert_type = Column(String(50), nullable=False)  # 'accident', 'pollution_spike', 'fire', 'flood'
-    location = Column(Geometry('POINT'), nullable=False)
     latitude = Column(Decimal(10, 8), nullable=False)
     longitude = Column(Decimal(11, 8), nullable=False)
     radius_km = Column(Decimal(6, 2), nullable=False)
@@ -25,7 +24,6 @@ class IncidentReport(BaseModel):
     __tablename__ = "incident_reports"
     
     reporter_session = Column(String(100), nullable=False)
-    location = Column(Geometry('POINT'), nullable=False)
     latitude = Column(Decimal(10, 8), nullable=False)
     longitude = Column(Decimal(11, 8), nullable=False)
     incident_type = Column(String(50), nullable=False)  # 'accident', 'road_closure', 'hazard'

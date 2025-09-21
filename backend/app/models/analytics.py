@@ -1,7 +1,7 @@
 """
 Analytics and metrics models
 """
-from sqlalchemy import Column, String, Integer, Decimal, DateTime, ForeignKey
+from sqlalchemy import Column, String, Integer, Decimal, DateTime, ForeignKey, Boolean
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import UUID
 from .base import BaseModel

@@ -9,7 +9,6 @@ from .base import BaseModel
 class AQIReading(BaseModel):
     __tablename__ = "aqi_readings"
     
-    location = Column(Geometry('POINT'), nullable=False)
     latitude = Column(Decimal(10, 8), nullable=False)
     longitude = Column(Decimal(11, 8), nullable=False)
     aqi_value = Column(Integer, nullable=False)
@@ -24,7 +23,6 @@ class AQIReading(BaseModel):
 class WeatherData(BaseModel):
     __tablename__ = "weather_data"
     
-    location = Column(Geometry('POINT'), nullable=False)
     latitude = Column(Decimal(10, 8), nullable=False)
     longitude = Column(Decimal(11, 8), nullable=False)
     temperature_celsius = Column(Decimal(5, 2))
