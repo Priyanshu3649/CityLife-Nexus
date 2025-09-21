@@ -6,6 +6,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import uvicorn
 
+from app.core.config import settings
+from app.api.v1.api import api_router
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -23,14 +26,17 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Set up CORS
+# Set up CORS using the same configuration as main.py
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=settings.ALLOWED_HOSTS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Include API router
+app.include_router(api_router, prefix="/api/v1")
 
 
 @app.get("/")
@@ -52,6 +58,6 @@ if __name__ == "__main__":
     uvicorn.run(
         "app.main_simple:app",
         host="0.0.0.0",
-        port=8002,
+        port=8001,
         reload=True
     )

@@ -37,6 +37,12 @@ class RouteOption(BaseSchema):
     segments: Optional[List[RouteSegment]] = None
 
 
+class RouteResponse(BaseSchema):
+    routes: List[RouteOption]
+    total_routes: int
+    request_id: Optional[str] = None
+
+
 class RouteComparison(BaseSchema):
     fast_route: RouteOption
     clean_route: RouteOption

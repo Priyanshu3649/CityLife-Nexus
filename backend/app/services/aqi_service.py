@@ -44,14 +44,17 @@ class AQIService:
         parameter: str = "pm25"
     ) -> List[AQIReading]:
         """
-        Get air quality measurements near a location from OpenAQ API
+        Get air quality measurements near a location from OpenAQ API v3
         """
         # Check rate limit
         if not rate_limiter.is_allowed("openaq"):
             logger.warning("OpenAQ API rate limit exceeded")
             return await self._get_cached_measurements(coordinates, radius_km)
         
+        # For OpenAQ v3, we need to use different endpoints
         url = f"{self.openaq_base_url}measurements"
+        
+        # OpenAQ v3 parameters
         params = {
             "coordinates": f"{coordinates.latitude},{coordinates.longitude}",
             "radius": int(radius_km * 1000),  # Convert km to meters
@@ -61,13 +64,32 @@ class AQIService:
             "sort": "desc"
         }
         
+        # Add API key header if available
+        headers = {}
+        openaq_api_key = getattr(settings, 'OPENAQ_API_KEY', None)
+        if openaq_api_key:
+            headers['X-API-Key'] = openaq_api_key
+        
         try:
-            response = await self.client.get(url, params=params)
+            logger.info(f"Requesting OpenAQ data for {coordinates.latitude},{coordinates.longitude}")
+            response = await self.client.get(url, params=params, headers=headers)
+            
+            logger.info(f"OpenAQ API response status: {response.status_code}")
+            
+            if response.status_code == 401:
+                logger.warning("OpenAQ API requires authentication. Using mock data.")
+                return await self._get_cached_measurements(coordinates, radius_km)
+            
             response.raise_for_status()
             data = response.json()
             
+            logger.info(f"OpenAQ API response structure: {list(data.keys())}")
+            
             readings = []
-            for result in data.get("results", []):
+            results = data.get("results", [])
+            logger.info(f"Found {len(results)} measurements from OpenAQ")
+            
+            for result in results:
                 try:
                     # Convert OpenAQ measurement to AQI reading
                     aqi_reading = self._convert_measurement_to_aqi(result)
@@ -81,7 +103,13 @@ class AQIService:
                     logger.warning(f"Failed to process measurement: {e}")
                     continue
             
-            return readings
+            # If we got real data, return it
+            if readings:
+                logger.info(f"Successfully fetched {len(readings)} real AQI readings from OpenAQ")
+                return readings
+            else:
+                logger.info("No real AQI data available, falling back to cached/mock data")
+                return await self._get_cached_measurements(coordinates, radius_km)
             
         except httpx.HTTPStatusError as e:
             logger.error(f"OpenAQ API HTTP error: {e.response.status_code}")

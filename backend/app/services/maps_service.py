@@ -1,5 +1,5 @@
 """
-Google Maps API integration service
+Google Maps API integration service with Delhi NCR focus
 """
 import httpx
 from typing import List, Dict, Any, Optional, Tuple
@@ -17,16 +17,28 @@ logger = logging.getLogger(__name__)
 
 
 class GoogleMapsService:
-    """Service for Google Maps API integration"""
+    """Service for Google Maps API integration with Delhi NCR focus"""
     
     def __init__(self):
         self.api_key = settings.GOOGLE_MAPS_API_KEY
         self.base_url = "https://maps.googleapis.com/maps/api"
         self.client = httpx.AsyncClient(timeout=30.0)
+        
+        # Delhi NCR focus configuration
+        self.delhi_ncr_bounds = settings.PRIMARY_REGION_BOUNDS
+        self.extended_ncr_bounds = settings.EXTENDED_NCR_BOUNDS
+        
+        # Delhi NCR components for location bias
+        self.delhi_ncr_components = [
+            "country:IN",  # India only
+            "administrative_area:Delhi",
+            "administrative_area:Haryana", 
+            "administrative_area:Uttar Pradesh"
+        ]
     
-    async def geocode_address(self, address: str) -> Optional[CoordinatesSchema]:
+    async def geocode_address(self, address: str, bias_to_ncr: bool = True) -> Optional[CoordinatesSchema]:
         """
-        Convert address to coordinates using Google Geocoding API
+        Convert address to coordinates using Google Geocoding API with Delhi NCR bias
         """
         # Check rate limit
         if not rate_limiter.is_allowed("google_maps"):
@@ -39,12 +51,35 @@ class GoogleMapsService:
             "key": self.api_key
         }
         
+        # Bias results to Delhi NCR region
+        if bias_to_ncr:
+            # Add viewport bias to Delhi NCR
+            bounds = self.extended_ncr_bounds
+            viewport = f"{bounds['south']},{bounds['west']}|{bounds['north']},{bounds['east']}"
+            params["bounds"] = viewport
+            
+            # Add component filtering for Indian locations
+            params["components"] = "country:IN"
+            
+            # Add region bias
+            params["region"] = "in"  # India
+        
         try:
             response = await self.client.get(url, params=params)
             response.raise_for_status()
             data = response.json()
             
             if data["status"] == "OK" and data["results"]:
+                # Prioritize results within Delhi NCR
+                for result in data["results"]:
+                    location = result["geometry"]["location"]
+                    lat, lng = location["lat"], location["lng"]
+                    
+                    # Check if within Delhi NCR bounds
+                    if self._is_within_ncr_bounds(lat, lng):
+                        return CoordinatesSchema(latitude=lat, longitude=lng)
+                
+                # If no result within NCR, return first result
                 location = data["results"][0]["geometry"]["location"]
                 return CoordinatesSchema(
                     latitude=location["lat"],
@@ -65,6 +100,98 @@ class GoogleMapsService:
             return None
         except Exception as e:
             logger.error(f"Geocoding error: {e}")
+            return None
+    
+    def _is_within_ncr_bounds(self, lat: float, lng: float) -> bool:
+        """
+        Check if coordinates are within Delhi NCR bounds
+        """
+        bounds = self.extended_ncr_bounds
+        return (
+            bounds["south"] <= lat <= bounds["north"] and
+            bounds["west"] <= lng <= bounds["east"]
+        )
+    
+    async def get_place_autocomplete(
+        self, 
+        input_text: str, 
+        bias_to_ncr: bool = True,
+        types: Optional[List[str]] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Get place autocomplete suggestions with Delhi NCR bias
+        """
+        if not rate_limiter.is_allowed("google_maps"):
+            logger.warning("Google Maps API rate limit exceeded for autocomplete")
+            return []
+        
+        url = f"{self.base_url}/place/autocomplete/json"
+        params = {
+            "input": input_text,
+            "key": self.api_key,
+            "language": "en"
+        }
+        
+        # Bias to Delhi NCR
+        if bias_to_ncr:
+            # Component restriction to India
+            params["components"] = "country:in"
+            
+            # Set bounds for Delhi NCR region
+            bounds = self.extended_ncr_bounds
+            southwest = f"{bounds['south']},{bounds['west']}"
+            northeast = f"{bounds['north']},{bounds['east']}"
+            params["bounds"] = f"{southwest}|{northeast}"
+            
+            # Add location bias to central Delhi for better results
+            params["location"] = "28.6139,77.2090"  # Connaught Place, Delhi
+            params["radius"] = "50000"  # 50km radius
+        
+        # Add place types if specified
+        if types:
+            params["types"] = "|".join(types)
+        
+        try:
+            response = await self.client.get(url, params=params)
+            response.raise_for_status()
+            data = response.json()
+            
+            if data["status"] == "OK":
+                return data["predictions"]
+            elif data["status"] == "ZERO_RESULTS":
+                return []
+            else:
+                logger.error(f"Autocomplete API error: {data['status']}")
+                return []
+                
+        except Exception as e:
+            logger.error(f"Autocomplete error: {e}")
+            return []
+    
+    async def get_place_details(self, place_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get detailed place information including coordinates
+        """
+        url = f"{self.base_url}/place/details/json"
+        params = {
+            "place_id": place_id,
+            "key": self.api_key,
+            "fields": "name,formatted_address,geometry,place_id,types"
+        }
+        
+        try:
+            response = await self.client.get(url, params=params)
+            response.raise_for_status()
+            data = response.json()
+            
+            if data["status"] == "OK":
+                return data["result"]
+            else:
+                logger.error(f"Place details API error: {data['status']}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Place details error: {e}")
             return None
     
     async def reverse_geocode(self, coordinates: CoordinatesSchema) -> Optional[str]:
@@ -131,7 +258,7 @@ class GoogleMapsService:
         # Add departure time for traffic-aware routing
         if departure_time:
             timestamp = int(departure_time.timestamp())
-            params["departure_time"] = timestamp
+            params["departure_time"] = str(timestamp)
         
         try:
             response = await self.client.get(url, params=params)
@@ -186,7 +313,7 @@ class GoogleMapsService:
         
         if departure_time:
             timestamp = int(departure_time.timestamp())
-            params["departure_time"] = timestamp
+            params["departure_time"] = str(timestamp)
         
         try:
             response = await self.client.get(url, params=params)
