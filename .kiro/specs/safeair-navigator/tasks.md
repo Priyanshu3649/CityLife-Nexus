@@ -32,14 +32,14 @@
   - Write integration tests with mock API responses
   - _Requirements: 6.1, 6.3_
 
-- [ ] 5. Build OpenAQ API integration for air quality data
+- [x] 5. Build OpenAQ API integration for air quality data
   - Create AirQualityService class for fetching real-time AQI data
   - Implement data caching strategy with Redis
   - Add geospatial queries for route-based AQI calculations
   - Write tests for AQI data processing and caching
   - _Requirements: 3.1, 6.2_
 
-- [ ] 6. Create mock traffic signal API and service
+- [x] 6. Create mock traffic signal API and service
   - Implement TrafficSignalService with mock signal timing data
   - Create realistic signal cycle patterns for demo purposes
   - Add signal state prediction algorithms
@@ -48,14 +48,14 @@
 
 ## Phase 3: Core Route Optimization Engine
 
-- [ ] 7. Implement multi-objective route scoring algorithm
+- [x] 7. Implement multi-objective route scoring algorithm
   - Create RouteOptimizer class with weighted scoring system
   - Implement time, AQI, and safety factor calculations
   - Add route comparison and ranking functionality
   - Write unit tests for scoring algorithm accuracy
   - _Requirements: 3.2, 3.3_
 
-- [ ] 8. Build green wave synchronization calculator
+- [x] 8. Build green wave synchronization calculator
   - Implement green wave offset calculation algorithms
   - Create corridor timing optimization for multiple signals
   - Add travel time estimation based on signal coordination

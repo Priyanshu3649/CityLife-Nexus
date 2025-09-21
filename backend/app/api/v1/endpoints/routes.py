@@ -112,6 +112,55 @@ async def get_route_options(
     return routes
 
 
+@router.post("/optimize", response_model=List[RouteOption])
+async def optimize_routes(
+    origin: CoordinatesSchema,
+    destination: CoordinatesSchema,
+    route_type: str = Query("balanced", regex="^(fastest|cleanest|safest|balanced|eco_friendly)$"),
+    departure_time: Optional[datetime] = None,
+    current_session: Optional[UserSessionResponse] = Depends(get_optional_session)
+):
+    """Get optimized routes with intelligent scoring"""
+    
+    from app.services.route_optimizer import route_optimizer
+    from app.schemas.user import UserPreferences, HealthProfile
+    
+    # Extract user preferences and health profile
+    user_preferences = None
+    health_profile = None
+    
+    if current_session:
+        if current_session.preferences:
+            try:
+                user_preferences = UserPreferences(**current_session.preferences)
+            except Exception:
+                pass
+        
+        if current_session.health_profile:
+            try:
+                health_profile = HealthProfile(**current_session.health_profile)
+            except Exception:
+                pass
+    
+    # Use route optimizer for intelligent routing
+    optimized_routes = await route_optimizer.optimize_route(
+        origin=origin,
+        destination=destination,
+        user_preferences=user_preferences,
+        health_profile=health_profile,
+        departure_time=departure_time,
+        route_type=route_type
+    )
+    
+    if not optimized_routes:
+        raise HTTPException(
+            status_code=404,
+            detail="No optimized routes found between the specified points"
+        )
+    
+    return optimized_routes
+
+
 @router.post("/route-comparison", response_model=RouteComparison)
 async def compare_routes(
     origin: CoordinatesSchema,
@@ -119,56 +168,61 @@ async def compare_routes(
     departure_time: Optional[datetime] = None,
     current_session: Optional[UserSessionResponse] = Depends(get_optional_session)
 ):
-    """Compare different route options"""
+    """Compare different route options with intelligent scoring"""
     
-    routes = await maps_service.get_multiple_route_options(
+    from app.services.route_optimizer import route_optimizer
+    from app.schemas.user import UserPreferences, HealthProfile
+    
+    # Extract user preferences and health profile
+    user_preferences = None
+    health_profile = None
+    
+    if current_session:
+        if current_session.preferences:
+            try:
+                user_preferences = UserPreferences(**current_session.preferences)
+            except Exception:
+                pass
+        
+        if current_session.health_profile:
+            try:
+                health_profile = HealthProfile(**current_session.health_profile)
+            except Exception:
+                pass
+    
+    # Use route optimizer for intelligent comparison
+    route_comparison = await route_optimizer.compare_routes(
         origin=origin,
         destination=destination,
+        user_preferences=user_preferences,
+        health_profile=health_profile,
         departure_time=departure_time
     )
     
-    if not routes:
+    if not route_comparison:
         raise HTTPException(
             status_code=404,
-            detail="No routes found for comparison"
+            detail="No routes found between the specified points"
         )
     
-    # Separate routes by type
-    fast_route = None
-    clean_route = None
-    balanced_route = None
+    return route_comparison
+
+
+@router.post("/route-metrics")
+async def calculate_route_metrics(
+    route: RouteOption,
+    baseline_route: Optional[RouteOption] = None
+):
+    """Calculate efficiency metrics for a route"""
     
-    for route in routes:
-        if route.route_type == "fast":
-            fast_route = route
-        elif route.route_type == "clean":
-            clean_route = route
-        elif route.route_type == "optimal":
-            balanced_route = route
+    from app.services.route_optimizer import route_optimizer
     
-    # Use first route as fallback if specific types not found
-    if not fast_route:
-        fast_route = routes[0]
-    if not clean_route:
-        clean_route = routes[-1] if len(routes) > 1 else routes[0]
-    
-    # Determine recommendation based on user preferences
-    recommendation = "balanced"
-    if current_session and current_session.preferences:
-        time_priority = current_session.preferences.get("prioritize_time", 0.4)
-        aqi_priority = current_session.preferences.get("prioritize_air_quality", 0.4)
-        
-        if time_priority > 0.6:
-            recommendation = "fast"
-        elif aqi_priority > 0.6:
-            recommendation = "clean"
-    
-    return RouteComparison(
-        fast_route=fast_route,
-        clean_route=clean_route,
-        balanced_route=balanced_route,
-        recommendation=recommendation
+    metrics = await route_optimizer.calculate_route_efficiency_metrics(
+        route=route,
+        baseline_route=baseline_route
     )
+    
+    return metrics
 
 
 @router.post("/distance-matrix")
