@@ -17,6 +17,6 @@ class CoordinatesSchema(BaseSchema):
     altitude: Optional[float] = None
 
 
-class TimestampMixin(BaseSchema):
+class TimestampMixin(BaseModel):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None

@@ -21,9 +21,6 @@ class TrafficSignalService:
     """Service for traffic signal management and prediction"""
     
     def __init__(self):
-        # Mock traffic signals database - in production this would be real infrastructure
-        self.mock_signals = self._initialize_mock_signals()
-        
         # Signal timing patterns for different road types
         self.signal_patterns = {
             "major_arterial": {"cycle": 120, "green": 60, "yellow": 4, "red": 56},
@@ -38,6 +35,9 @@ class TrafficSignalService:
             "corridor_2": ["TL005", "TL006", "TL007"],
             "corridor_3": ["TL008", "TL009", "TL010", "TL011", "TL012"]
         }
+        
+        # Mock traffic signals database - in production this would be real infrastructure
+        self.mock_signals = self._initialize_mock_signals()
     
     def _initialize_mock_signals(self) -> Dict[str, Dict[str, Any]]:
         """Initialize mock traffic signals for demonstration"""
