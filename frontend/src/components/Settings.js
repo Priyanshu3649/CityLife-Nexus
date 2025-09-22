@@ -55,7 +55,7 @@ const Settings = () => {
             ⚙️ Settings
           </h1>
           <p style={{ color: '#6b7280', margin: '4px 0 0 0' }}>
-            Customize your SafeAir Navigator experience
+            Customize your CityLife Nexus experience
           </p>
         </div>
       </header>

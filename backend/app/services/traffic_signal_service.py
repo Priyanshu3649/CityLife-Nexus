@@ -59,7 +59,13 @@ class TrafficSignalService:
             {"id": "TL012", "lat": 28.6210, "lng": 77.2000, "type": "collector"},
             {"id": "TL013", "lat": 28.6350, "lng": 77.2250, "type": "local"},
             {"id": "TL014", "lat": 28.6180, "lng": 77.1980, "type": "local"},
-            {"id": "TL015", "lat": 28.6400, "lng": 77.2300, "type": "local"}
+            {"id": "TL015", "lat": 28.6400, "lng": 77.2300, "type": "local"},
+            # Christ University Ghaziabad area signals
+            {"id": "CU001", "lat": 28.6837, "lng": 77.4104, "type": "major_arterial", "name": "Christ University Main Gate"},
+            {"id": "CU002", "lat": 28.6850, "lng": 77.4120, "type": "minor_arterial", "name": "Mariam Nagar Crossroads"},
+            {"id": "CU003", "lat": 28.6825, "lng": 77.4090, "type": "collector", "name": "Nandgram Road Junction"},
+            {"id": "CU004", "lat": 28.6860, "lng": 77.4135, "type": "local", "name": "Meerut Road Signal"},
+            {"id": "CU005", "lat": 28.6810, "lng": 77.4075, "type": "collector", "name": "Sewa Nagar Intersection"}
         ]
         
         for signal_info in signal_locations:
@@ -86,7 +92,8 @@ class TrafficSignalService:
                 "corridor_id": self._get_corridor_id(signal_info["id"]),
                 "last_updated": datetime.utcnow(),
                 "adaptive": random.choice([True, False]),  # Some signals are adaptive
-                "pedestrian_crossing": random.choice([True, False])
+                "pedestrian_crossing": random.choice([True, False]),
+                "intersection_name": signal_info.get("name", signal_info["id"])  # Add intersection name
             }
         
         return signals
@@ -127,14 +134,43 @@ class TrafficSignalService:
             current_state = "red"
             time_to_next_change = signal_data["cycle_time_seconds"] - cycle_position
         
+        # Generate recommendation based on current state
+        recommendation = self._generate_recommendation(
+            current_state, 
+            int(time_to_next_change), 
+            signal_data.get("intersection_name", signal_id)
+        )
+        
         return TrafficSignalState(
             signal_id=signal_id,
             coordinates=signal_data["coordinates"],
             current_state=current_state,
             cycle_time_seconds=signal_data["cycle_time_seconds"],
             time_to_next_change=int(time_to_next_change),
-            is_coordinated=signal_data["is_coordinated"]
+            is_coordinated=signal_data["is_coordinated"],
+            intersection_name=signal_data.get("intersection_name"),
+            recommendation=recommendation
         )
+    
+    def _generate_recommendation(
+        self, 
+        current_state: str, 
+        time_to_next_change: int, 
+        intersection_name: str
+    ) -> str:
+        """Generate recommendation based on signal state"""
+        if current_state == "green":
+            if time_to_next_change > 10:
+                return f"Proceed through {intersection_name} - Green light for {time_to_next_change}s"
+            else:
+                return f"Proceed quickly through {intersection_name} - Green light changing soon"
+        elif current_state == "yellow":
+            return f"Prepare to stop at {intersection_name} - Yellow light for {time_to_next_change}s"
+        else:  # red
+            if time_to_next_change > 30:
+                return f"Stop at {intersection_name} - Red light for {time_to_next_change}s"
+            else:
+                return f"Prepare for green at {intersection_name} - Red light changing soon"
     
     def predict_signal_state(
         self,
@@ -487,6 +523,9 @@ class TrafficSignalService:
         
         signal_ids = self.corridors[corridor_id]
         signals = [self.get_current_signal_state(sid) for sid in signal_ids if sid in self.mock_signals]
+        
+        # Filter out None values
+        signals = [s for s in signals if s is not None]
         
         if not signals:
             return {"error": "No signals found in corridor"}

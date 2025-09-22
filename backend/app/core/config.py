@@ -1,5 +1,5 @@
 """
-Configuration settings for SafeAir Navigator
+Configuration settings for CityLife Nexus
 """
 from pydantic_settings import BaseSettings
 from typing import List
@@ -8,7 +8,7 @@ from typing import List
 class Settings(BaseSettings):
     # API Configuration
     API_V1_STR: str = "/api/v1"
-    PROJECT_NAME: str = "SafeAir Navigator"
+    PROJECT_NAME: str = "CityLife Nexus"
     
     # CORS
     ALLOWED_HOSTS: List[str] = ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:3001", "http://127.0.0.1:3001"]

@@ -1,4 +1,4 @@
--- SafeAir Navigator Database Initialization
+-- CityLife Nexus Database Initialization
 -- Enable PostGIS extension
 CREATE EXTENSION IF NOT EXISTS postgis;
 

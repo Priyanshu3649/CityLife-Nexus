@@ -57,6 +57,7 @@ const NavigationView = () => {
     const handleClickOutside = (event) => {
       const isSuggestionClick = event.target.closest('[data-suggestion-item]');
       
+      // Check if click is outside both input fields and suggestions
       if (fromInputRef.current && !fromInputRef.current.contains(event.target) && !isSuggestionClick) {
         setShowFromSuggestions(false);
       }
@@ -257,13 +258,21 @@ const NavigationView = () => {
       if (response.ok) {
         const data = await response.json();
         setSuggestions(data.predictions || []);
+      } else {
+        // If API fails, provide mock suggestions
+        setSuggestions([
+          { description: `${query} - Delhi, India`, place_id: 'mock1' },
+          { description: `${query} - Mumbai, India`, place_id: 'mock2' },
+          { description: `${query} - Bangalore, India`, place_id: 'mock3' }
+        ]);
       }
     } catch (error) {
       console.error('Error fetching place suggestions:', error);
+      // Provide mock suggestions when API fails
       setSuggestions([
-        { description: `${query} - Delhi, India`, place_id: 'mock1' },
-        { description: `${query} - Mumbai, India`, place_id: 'mock2' },
-        { description: `${query} - Bangalore, India`, place_id: 'mock3' }
+        { description: `${query}, Delhi, India`, place_id: 'mock1' },
+        { description: `${query}, Mumbai, India`, place_id: 'mock2' },
+        { description: `${query}, Bangalore, India`, place_id: 'mock3' }
       ]);
     }
   };
@@ -904,7 +913,7 @@ const NavigationView = () => {
               gap: '12px'
             }}>
               <span style={{ fontSize: '28px' }}>🧭</span>
-              SafeAir Navigator
+              CityLife Nexus
             </h1>
             <p style={{ 
               margin: '4px 0 0 0', 
@@ -1043,7 +1052,13 @@ const NavigationView = () => {
                       outline: 'none',
                       transition: 'border-color 0.2s ease'
                     }}
-                    onFocus={() => setShowFromSuggestions(true)}
+                    onFocus={() => {
+                      setShowFromSuggestions(true);
+                      // Show suggestions if there are any
+                      if (fromSuggestions.length > 0) {
+                        setShowFromSuggestions(true);
+                      }
+                    }}
                   />
                   {showFromSuggestions && fromSuggestions.length > 0 && (
                     <div style={{
@@ -1752,7 +1767,7 @@ const NavigationView = () => {
               opacity: 0.9,
               fontWeight: '400'
             }}>
-              © 2023 SafeAir Navigator. All rights reserved.
+              © 2023 CityLife Nexus. All rights reserved.
             </p>
           </div>
           

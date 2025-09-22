@@ -57,6 +57,8 @@ class TrafficSignalState(BaseSchema):
     cycle_time_seconds: int
     time_to_next_change: Optional[int] = None
     is_coordinated: bool = False
+    intersection_name: Optional[str] = None
+    recommendation: Optional[str] = None  # Add recommendation field
 
 
 class SignalPrediction(BaseSchema):

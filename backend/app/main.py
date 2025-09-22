@@ -1,5 +1,5 @@
 """
-SafeAir Navigator - Main FastAPI Application
+CityLife Nexus - Main FastAPI Application
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,14 +18,14 @@ from api.v1.api import api_router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    print("SafeAir Navigator starting up...")
+    print("CityLife Nexus starting up...")
     yield
     # Shutdown
-    print("SafeAir Navigator shutting down...")
+    print("CityLife Nexus shutting down...")
 
 
 app = FastAPI(
-    title="SafeAir Navigator API",
+    title="CityLife Nexus API",
     description="Smart navigation system with traffic signal coordination and pollution-aware routing",
     version="1.0.0",
     lifespan=lifespan
@@ -46,12 +46,12 @@ app.include_router(api_router, prefix="/api/v1")
 
 @app.get("/")
 async def root():
-    return {"message": "SafeAir Navigator API", "version": "1.0.0"}
+    return {"message": "CityLife Nexus API", "version": "1.0.0"}
 
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "service": "safeair-navigator"}
+    return {"status": "healthy", "service": "citylife-nexus"}
 
 
 if __name__ == "__main__":

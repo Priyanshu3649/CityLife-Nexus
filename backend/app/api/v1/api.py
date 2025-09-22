@@ -1,5 +1,5 @@
 """
-Main API router for SafeAir Navigator
+Main API router for CityLife Nexus
 """
 from fastapi import APIRouter
 

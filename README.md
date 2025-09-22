@@ -1,4 +1,4 @@
-# SafeAir Navigator
+# CityLife Nexus
 
 A smart navigation system that synchronizes traffic signals, predicts light states, and suggests pollution-aware routes.
 
@@ -28,7 +28,7 @@ A smart navigation system that synchronizes traffic signals, predicts light stat
 1. Clone the repository:
 ```bash
 git clone <repository-url>
-cd safeair-navigator
+cd citylife-nexus
 ```
 
 2. Start all services:
@@ -41,89 +41,83 @@ docker-compose up -d
 - Backend API: http://localhost:8000
 - API Documentation: http://localhost:8000/docs
 
-### Local Development
+### Local Development Setup
 
-#### Backend Setup
-
-1. Navigate to backend directory:
+1. Backend Setup:
 ```bash
 cd backend
-```
-
-2. Create virtual environment:
-```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
-
-3. Install dependencies:
-```bash
 pip install -r requirements.txt
 ```
 
-4. Set up environment variables:
-```bash
-cp .env.example .env
-# Edit .env with your configuration
-```
-
-5. Run the backend:
-```bash
-uvicorn app.main:app --reload
-```
-
-#### Frontend Setup
-
-1. Navigate to frontend directory:
+2. Frontend Setup:
 ```bash
 cd frontend
-```
-
-2. Install dependencies:
-```bash
 npm install
 ```
 
-3. Start development server:
+3. Start Development Servers:
+
+Backend:
 ```bash
+cd backend
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+Frontend:
+```bash
+cd frontend
 npm start
 ```
 
 ## Project Structure
 
 ```
-safeair-navigator/
+citylife-nexus/
 ├── backend/                 # FastAPI backend
 │   ├── app/
 │   │   ├── api/            # API endpoints
-│   │   ├── core/           # Core configuration
+│   │   ├── core/           # Core configuration and utilities
 │   │   ├── models/         # Database models
-│   │   ├── services/       # Business logic
-│   │   └── main.py         # FastAPI app
-│   ├── requirements.txt
-│   └── Dockerfile
+│   │   ├── schemas/        # Pydantic schemas
+│   │   └── services/       # Business logic services
+│   ├── tests/              # Unit and integration tests
+│   └── alembic/            # Database migrations
 ├── frontend/               # React frontend
-│   ├── src/
-│   │   ├── components/     # React components
-│   │   ├── services/       # API services
-│   │   └── App.tsx
-│   ├── package.json
-│   └── Dockerfile
-├── docker-compose.yml      # Docker services
-└── README.md
+│   ├── public/             # Static assets
+│   └── src/                # Source code
+│       ├── components/     # React components
+│       ├── services/       # API service clients
+│       └── utils/          # Utility functions
+├── docker-compose.yml      # Docker configuration
+└── README.md              # This file
 ```
 
 ## API Documentation
 
-Once the backend is running, visit http://localhost:8000/docs for interactive API documentation.
+- Swagger UI: http://localhost:8000/docs
+- ReDoc: http://localhost:8000/redoc
+
+## Development Guidelines
+
+### Backend
+- Follow REST API best practices
+- Use Pydantic for data validation
+- Implement proper error handling
+- Write unit tests for new features
+
+### Frontend
+- Use React hooks for state management
+- Follow component-based architecture
+- Implement responsive design
+- Use TypeScript for type safety
 
 ## Contributing
 
 1. Fork the repository
 2. Create a feature branch
-3. Make your changes
-4. Add tests
-5. Submit a pull request
+3. Commit your changes
+4. Push to the branch
+5. Create a Pull Request
 
 ## License
 

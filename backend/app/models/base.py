@@ -1,5 +1,5 @@
 """
-Base model class for SafeAir Navigator
+Base model class for CityLife Nexus
 """
 from sqlalchemy import Column, DateTime, func
 from sqlalchemy.ext.declarative import declarative_base

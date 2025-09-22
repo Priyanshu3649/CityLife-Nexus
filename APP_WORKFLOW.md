@@ -1,7 +1,6 @@
-# SafeAir Navigator - App Workflow
+# CityLife Nexus - App Workflow
 
-## Overview
-SafeAir Navigator is a smart navigation application that provides pollution-aware routing with real-time traffic light advisories and voice navigation capabilities.
+CityLife Nexus is a smart navigation application that provides pollution-aware routing with real-time traffic light advisories and voice navigation capabilities.
 
 ## Main Workflow
 

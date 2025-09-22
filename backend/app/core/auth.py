@@ -15,7 +15,7 @@ security = HTTPBearer(auto_error=False)
 
 
 class SessionAuth:
-    """Session-based authentication for SafeAir Navigator"""
+    """Session-based authentication for CityLife Nexus"""
     
     def __init__(self):
         pass
@@ -57,51 +57,30 @@ class SessionAuth:
         """
         Require a valid session for the request
         """
-        user_session = self.get_session_from_header(request, credentials, db)
+        session_id = None
+        
+        # Try to get session ID from Authorization header (Bearer token)
+        if credentials:
+            session_id = credentials.credentials
+        
+        # Try to get session ID from X-Session-ID header
+        if not session_id:
+            session_id = request.headers.get("X-Session-ID")
+        
+        if not session_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Session ID required"
+            )
+        
+        # Validate session exists in database
+        session_service = SessionService(db)
+        user_session = session_service.get_session(session_id)
         
         if not user_session:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Valid session required. Please provide session ID in Authorization header or X-Session-ID header.",
-                headers={"WWW-Authenticate": "Bearer"},
+                detail="Invalid or expired session"
             )
         
         return user_session
-    
-    def optional_session(
-        self,
-        request: Request,
-        credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
-        db: Session = Depends(get_db)
-    ) -> Optional[UserSessionResponse]:
-        """
-        Optional session authentication - returns None if no valid session
-        """
-        return self.get_session_from_header(request, credentials, db)
-
-
-# Create global auth instance
-auth = SessionAuth()
-
-# Dependency functions for FastAPI
-def get_current_session(
-    request: Request,
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
-    db: Session = Depends(get_db)
-) -> UserSessionResponse:
-    """Dependency to get current authenticated session"""
-    return auth.require_session(request, credentials, db)
-
-
-def get_optional_session(
-    request: Request,
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
-    db: Session = Depends(get_db)
-) -> Optional[UserSessionResponse]:
-    """Dependency to get optional session"""
-    return auth.optional_session(request, credentials, db)
-
-
-def get_session_service(db: Session = Depends(get_db)) -> SessionService:
-    """Dependency to get session service"""
-    return SessionService(db)
