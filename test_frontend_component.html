@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Navigation View Component</title>
+</head>
+<body>
+    <h1>Test Navigation View Component</h1>
+    
+    <div>
+        <label for="fromLocation">From Location:</label>
+        <input type="text" id="fromLocation" placeholder="Type 'Nar' to test">
+        <div id="fromSuggestions" style="border: 1px solid #ccc; max-height: 200px; overflow-y: auto;"></div>
+    </div>
+    
+    <br>
+    
+    <div>
+        <label for="toLocation">To Location:</label>
+        <input type="text" id="toLocation" placeholder="Type 'Nar' to test">
+        <div id="toSuggestions" style="border: 1px solid #ccc; max-height: 200px; overflow-y: auto;"></div>
+    </div>
+
+    <script>
+        // Mock the searchPlaces function
+        async function searchPlaces(query) {
+            if (query.length < 3) {
+                return [];
+            }
+
+            try {
+                const response = await fetch(`http://127.0.0.1:8000/api/v1/maps/autocomplete?query=${encodeURIComponent(query)}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    return data.predictions || [];
+                }
+                return [];
+            } catch (error) {
+                console.error('Error fetching place suggestions:', error);
+                return [];
+            }
+        }
+
+        // Display suggestions
+        function displaySuggestions(suggestions, containerId) {
+            const container = document.getElementById(containerId);
+            container.innerHTML = '';
+            
+            if (suggestions.length === 0) {
+                container.innerHTML = '<div>No suggestions found</div>';
+                return;
+            }
+            
+            suggestions.forEach((suggestion, index) => {
+                const div = document.createElement('div');
+                div.textContent = `📍 ${suggestion.description}`;
+                div.style.padding = '10px';
+                div.style.cursor = 'pointer';
+                div.style.borderBottom = index < suggestions.length - 1 ? '1px solid #eee' : 'none';
+                
+                div.addEventListener('click', () => {
+                    alert(`Selected: ${suggestion.description}`);
+                });
+                
+                container.appendChild(div);
+            });
+        }
+
+        // Setup event listeners
+        document.getElementById('fromLocation').addEventListener('input', async function(e) {
+            const query = e.target.value;
+            const suggestions = await searchPlaces(query);
+            displaySuggestions(suggestions, 'fromSuggestions');
+        });
+
+        document.getElementById('toLocation').addEventListener('input', async function(e) {
+            const query = e.target.value;
+            const suggestions = await searchPlaces(query);
+            displaySuggestions(suggestions, 'toSuggestions');
+        });
+    </script>
+</body>
+</html>

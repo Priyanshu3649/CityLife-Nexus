@@ -28,9 +28,25 @@ async def autocomplete_places(query: str = Query(..., min_length=3)):
     Get place autocomplete suggestions using Google Places API
     """
     try:
-        # For now, return mock suggestions since we need Google Places API setup
-        # In production, this would call Google Places Autocomplete API
+        # Call Google Places Autocomplete API through our service
+        suggestions = await maps_service.get_place_autocomplete(query)
         
+        # Format suggestions to match expected response structure
+        formatted_suggestions = []
+        for suggestion in suggestions:
+            formatted_suggestions.append({
+                "description": suggestion.get("description", ""),
+                "place_id": suggestion.get("place_id", ""),
+                "structured_formatting": suggestion.get("structured_formatting", {
+                    "main_text": suggestion.get("description", ""),
+                    "secondary_text": ""
+                })
+            })
+        
+        return AutocompleteResponse(predictions=formatted_suggestions)
+        
+    except Exception as e:
+        # Fallback to mock suggestions if API fails
         mock_suggestions = [
             {
                 "description": f"{query}, Delhi, India",
@@ -59,9 +75,6 @@ async def autocomplete_places(query: str = Query(..., min_length=3)):
         ]
         
         return AutocompleteResponse(predictions=mock_suggestions)
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Autocomplete failed: {str(e)}")
 
 
 @router.get("/geocode", response_model=GeocodeResponse)

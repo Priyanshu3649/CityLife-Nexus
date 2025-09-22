@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "dependencies": {
+    "@react-google-maps/api": "^2.20.7",
     "@types/leaflet": "^1.9.8",
     "@types/node": "^16.18.68",
     "@types/react": "^18.2.42",
