@@ -5,9 +5,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import uvicorn
+import sys
+import os
 
-from app.core.config import settings
-from app.api.v1.api import api_router
+# Add the current directory to the path
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+from core.config import settings
+from api.v1.api import api_router
 
 
 @asynccontextmanager
@@ -51,8 +56,8 @@ async def health_check():
 
 if __name__ == "__main__":
     uvicorn.run(
-        "app.main:app",
+        "main:app",
         host="0.0.0.0",
-        port=8000,
+        port=8001,
         reload=True
     )

@@ -1,18 +1,27 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import MapComponent from './MapComponent'; // Import MapComponent
+import MapComponent from './MapComponent';
 
 const NavigationView = () => {
   const navigate = useNavigate();
   const [fromLocation, setFromLocation] = useState('');
   const [toLocation, setToLocation] = useState('');
   const [routePreference, setRoutePreference] = useState('balanced');
-  const [vehicleType, setVehicleType] = useState('car'); // Add vehicle type state
+  const [vehicleType, setVehicleType] = useState('car');
   const [showRoutes, setShowRoutes] = useState(false);
   const [routes, setRoutes] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [selectedRouteId, setSelectedRouteId] = useState(null); // Add selected route state
-  const [trafficLights, setTrafficLights] = useState([]); // Add traffic lights state
+  const [selectedRouteId, setSelectedRouteId] = useState(null);
+  const [trafficLights, setTrafficLights] = useState([]);
+  const [voiceNavigation, setVoiceNavigation] = useState(true);
+  const [userLocation, setUserLocation] = useState(null);
+  const [mapCenter, setMapCenter] = useState({ lat: 28.6139, lng: 77.2090 });
+  
+  // New states for advanced features
+  const [tripLogs, setTripLogs] = useState([]);
+  const [ecoScore, setEcoScore] = useState(null);
+  const [isRerouting, setIsRerouting] = useState(false);
+  const [emergencyAlert, setEmergencyAlert] = useState(null);
   
   // Google Maps autocomplete states
   const [fromSuggestions, setFromSuggestions] = useState([]);
@@ -24,11 +33,28 @@ const NavigationView = () => {
   
   const fromInputRef = useRef(null);
   const toInputRef = useRef(null);
+  const [isNavigating, setIsNavigating] = useState(false);
+  const [nextSignal, setNextSignal] = useState(null);
+  const [userPosition, setUserPosition] = useState(null);
+  const [currentInstruction, setCurrentInstruction] = useState({
+    icon: '↑',
+    text: 'Continue straight',
+    detail: 'for 200 meters'
+  });
+
+  // Trip statistics tracking
+  const [tripStats, setTripStats] = useState({
+    signalsOnGreen: 0,
+    signalsOnRed: 0,
+    totalTime: 0,
+    idlingTime: 0,
+    pollutionExposure: 0,
+    baselineIdling: 0
+  });
 
   // Close dropdowns when clicking outside
   useEffect(() => {
     const handleClickOutside = (event) => {
-      // Check if click is on a suggestion item
       const isSuggestionClick = event.target.closest('[data-suggestion-item]');
       
       if (fromInputRef.current && !fromInputRef.current.contains(event.target) && !isSuggestionClick) {
@@ -52,26 +78,20 @@ const NavigationView = () => {
     const timer = setInterval(() => {
       setTrafficLights(prevLights => 
         prevLights.map(light => {
-          // Always update the time remaining, even if it goes to 0 or below
           const newTimeRemaining = Math.max(0, light.current_state.time_remaining - 1);
-          
-          // If time reaches 0, we need to determine the next state
           let newColor = light.current_state.color;
           let newTimeToNextChange = newTimeRemaining;
           
-          // When time reaches 0, change the signal state
           if (light.current_state.time_remaining === 1) {
             if (light.current_state.color === 'red') {
               newColor = 'green';
-              // In a real system, this would come from the API, but for demo we'll simulate
-              newTimeToNextChange = 30; // Simulate green duration
+              newTimeToNextChange = 30;
             } else if (light.current_state.color === 'green') {
               newColor = 'yellow';
-              newTimeToNextChange = 3; // Simulate yellow duration
+              newTimeToNextChange = 3;
             } else if (light.current_state.color === 'yellow') {
               newColor = 'red';
-              // In a real system, this would come from the API, but for demo we'll simulate
-              newTimeToNextChange = 45; // Simulate red duration
+              newTimeToNextChange = 45;
             }
           }
           
@@ -90,6 +110,40 @@ const NavigationView = () => {
     return () => clearInterval(timer);
   }, [trafficLights]);
 
+  // Emergency auto-reroute monitoring
+  useEffect(() => {
+    if (!isNavigating) return;
+    
+    const monitorConditions = async () => {
+      try {
+        // Check for emergency conditions (accidents, congestion, pollution spikes)
+        const response = await fetch('http://127.0.0.1:8001/api/v1/emergency/alerts', {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          }
+        });
+        
+        if (response.ok) {
+          const alerts = await response.json();
+          if (alerts && alerts.length > 0) {
+            const criticalAlert = alerts.find(alert => alert.severity === 'critical');
+            if (criticalAlert) {
+              setEmergencyAlert(criticalAlert);
+              speakAlert(`Emergency Alert: ${criticalAlert.message}. Rerouting due to ${criticalAlert.type} ahead.`);
+              triggerReroute();
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error checking emergency conditions:', error);
+      }
+    };
+    
+    const interval = setInterval(monitorConditions, 30000); // Check every 30 seconds
+    return () => clearInterval(interval);
+  }, [isNavigating]);
+
   const handleNavigation = (path) => {
     navigate(path);
   };
@@ -97,14 +151,12 @@ const NavigationView = () => {
   // Fetch traffic light data for the route
   const fetchTrafficLightData = async (fromCoords, toCoords) => {
     try {
-      // Create a simple route with start and end points
       const routeCoordinates = [
-        { latitude: fromCoords.latitude, longitude: fromCoords.longitude },
-        { latitude: toCoords.latitude, longitude: toCoords.longitude }
+        { latitude: fromCoords.lat, longitude: fromCoords.lng },
+        { latitude: toCoords.lat, longitude: toCoords.lng }
       ];
       
-      // Fetch traffic lights along the route
-      const response = await fetch('http://127.0.0.1:8000/api/v1/signals/along-route', {
+      const response = await fetch('http://127.0.0.1:8001/api/v1/signals/along-route', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -114,8 +166,6 @@ const NavigationView = () => {
       
       if (response.ok) {
         const signals = await response.json();
-        
-        // Transform the data to match our expected format
         const trafficLightsData = signals.map(signal => ({
           light_id: signal.signal_id,
           coordinates: { 
@@ -128,10 +178,8 @@ const NavigationView = () => {
           },
           intersection_name: signal.intersection_name || signal.signal_id
         }));
-        
         setTrafficLights(trafficLightsData);
       } else {
-        // Fallback to mock data if API fails
         const mockTrafficLights = [
           {
             light_id: 'cp_outer_circle',
@@ -156,7 +204,6 @@ const NavigationView = () => {
       }
     } catch (error) {
       console.error('Error fetching traffic light data:', error);
-      // Fallback to mock data on error
       const mockTrafficLights = [
         {
           light_id: 'cp_outer_circle',
@@ -181,29 +228,38 @@ const NavigationView = () => {
     }
   };
 
+  // Linear interpolation for AQI values between sensors
+  const interpolateAQI = useCallback((point, sensor1, sensor2) => {
+    if (!sensor1 || !sensor2) return 100; // Default AQI
+    
+    const distance1 = calculateDistance(point, sensor1.coordinates);
+    const distance2 = calculateDistance(point, sensor2.coordinates);
+    const totalDistance = distance1 + distance2;
+    
+    if (totalDistance === 0) return sensor1.aqi;
+    
+    // Linear interpolation formula
+    const weight1 = distance2 / totalDistance;
+    const weight2 = distance1 / totalDistance;
+    
+    return Math.round(sensor1.aqi * weight1 + sensor2.aqi * weight2);
+  }, []);
+
   // Google Places Autocomplete
   const searchPlaces = async (query, setSuggestions) => {
-    console.log('Searching places for query:', query);
     if (query.length < 3) {
-      console.log('Query too short, clearing suggestions');
       setSuggestions([]);
       return;
     }
 
     try {
-      console.log('Fetching suggestions for:', query);
-      const response = await fetch(`http://127.0.0.1:8000/api/v1/maps/autocomplete?query=${encodeURIComponent(query)}`);
-      console.log('API response status:', response.status);
+      const response = await fetch(`http://127.0.0.1:8001/api/v1/maps/autocomplete?query=${encodeURIComponent(query)}`);
       if (response.ok) {
         const data = await response.json();
-        console.log('Received suggestions:', data.predictions);
         setSuggestions(data.predictions || []);
-      } else {
-        console.error('API error response:', response.status);
       }
     } catch (error) {
       console.error('Error fetching place suggestions:', error);
-      // Fallback to mock suggestions for demo
       setSuggestions([
         { description: `${query} - Delhi, India`, place_id: 'mock1' },
         { description: `${query} - Mumbai, India`, place_id: 'mock2' },
@@ -214,7 +270,6 @@ const NavigationView = () => {
 
   const handleFromLocationChange = (e) => {
     const value = e.target.value;
-    console.log('From location changed:', value);
     setFromLocation(value);
     setShowFromSuggestions(true);
     searchPlaces(value, setFromSuggestions);
@@ -222,71 +277,119 @@ const NavigationView = () => {
 
   const handleToLocationChange = (e) => {
     const value = e.target.value;
-    console.log('To location changed:', value);
     setToLocation(value);
     setShowToSuggestions(true);
     searchPlaces(value, setToSuggestions);
   };
 
   const selectFromLocation = async (suggestion) => {
-    console.log('Selecting from location:', suggestion);
     setFromLocation(suggestion.description);
     setShowFromSuggestions(false);
     setFromSuggestions([]);
     
-    // Get coordinates for the selected place
     try {
-      const response = await fetch(`http://127.0.0.1:8000/api/v1/maps/geocode?address=${encodeURIComponent(suggestion.description)}`);
-      console.log('Geocode response status:', response.status);
+      const response = await fetch(`http://127.0.0.1:8001/api/v1/maps/geocode?address=${encodeURIComponent(suggestion.description)}`);
       if (response.ok) {
         const data = await response.json();
-        console.log('Geocode data:', data);
-        console.log('Coordinates:', data.coordinates);
-        // Convert coordinates format from {latitude, longitude} to {lat, lng}
         if (data.coordinates) {
           const convertedCoords = {
             lat: data.coordinates.latitude,
             lng: data.coordinates.longitude
           };
-          console.log('Converted coordinates:', convertedCoords);
           setSelectedFromCoords(convertedCoords);
         }
-      } else {
-        console.error('Geocode API error:', response.status);
       }
     } catch (error) {
-      console.error('Error geocoding from location:', error);
+      console.error('Error fetching geocode data:', error);
     }
   };
 
   const selectToLocation = async (suggestion) => {
-    console.log('Selecting to location:', suggestion);
     setToLocation(suggestion.description);
     setShowToSuggestions(false);
     setToSuggestions([]);
     
-    // Get coordinates for the selected place
     try {
-      const response = await fetch(`http://127.0.0.1:8000/api/v1/maps/geocode?address=${encodeURIComponent(suggestion.description)}`);
-      console.log('Geocode response status:', response.status);
+      const response = await fetch(`http://127.0.0.1:8001/api/v1/maps/geocode?address=${encodeURIComponent(suggestion.description)}`);
       if (response.ok) {
         const data = await response.json();
-        console.log('Geocode data:', data);
-        console.log('Coordinates:', data.coordinates);
-        // Convert coordinates format from {latitude, longitude} to {lat, lng}
         if (data.coordinates) {
           const convertedCoords = {
             lat: data.coordinates.latitude,
             lng: data.coordinates.longitude
           };
-          console.log('Converted coordinates:', convertedCoords);
           setSelectedToCoords(convertedCoords);
         }
-      } else {
-        console.error('Geocode API error:', response.status);
       }
     } catch (error) {
-      console.error('Error geocoding to location:', error);
+      console.error('Error fetching geocode data:', error);
+    }
+  };
+
+  const swapLocations = () => {
+    const tempLocation = fromLocation;
+    const tempCoords = selectedFromCoords;
+    
+    setFromLocation(toLocation);
+    setSelectedFromCoords(selectedToCoords);
+    
+    setToLocation(tempLocation);
+    setSelectedToCoords(tempCoords);
+    
+    setFromSuggestions([]);
+    setToSuggestions([]);
+    setShowFromSuggestions(false);
+    setShowToSuggestions(false);
+  };
+
+  // Emergency auto-reroute function
+  const triggerReroute = async () => {
+    if (!selectedFromCoords || !selectedToCoords) return;
+    
+    setIsRerouting(true);
+    speakAlert("Rerouting due to emergency conditions ahead.");
+    
+    try {
+      const response = await fetch('http://127.0.0.1:8001/api/v1/maps/reroute', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          start_coords: {
+            latitude: userPosition ? userPosition.lat : selectedFromCoords.lat,
+            longitude: userPosition ? userPosition.lng : selectedFromCoords.lng
+          },
+          end_coords: {
+            latitude: selectedToCoords.lat,
+            longitude: selectedToCoords.lng
+          },
+          preferences: {
+            prioritize_time: routePreference === 'fastest' ? 0.8 : routePreference === 'balanced' ? 0.4 : 0.2,
+            prioritize_air_quality: routePreference === 'cleanest' ? 0.8 : routePreference === 'balanced' ? 0.4 : 0.2,
+            prioritize_safety: 0.9, // High priority for safety in rerouting
+            max_detour_minutes: 15
+          },
+          vehicle_type: vehicleType,
+          emergency_conditions: emergencyAlert
+        })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setRoutes([data.route]); // Assuming reroute returns a single optimal route
+        setSelectedRouteId(data.route.id);
+        await fetchTrafficLightData(
+          userPosition || selectedFromCoords, 
+          selectedToCoords
+        );
+        speakAlert("New route calculated. Follow the updated directions.");
+      }
+    } catch (error) {
+      console.error('Error during rerouting:', error);
+      speakAlert("Unable to calculate new route. Continue on current path with caution.");
+    } finally {
+      setIsRerouting(false);
     }
   };
 
@@ -303,11 +406,10 @@ const NavigationView = () => {
 
     setIsLoading(true);
     setShowRoutes(false);
-    setSelectedRouteId(null); // Clear any previously selected route
+    setSelectedRouteId(null);
 
     try {
-      // Call backend API to get real routes with AQI data
-      const response = await fetch('http://127.0.0.1:8000/api/v1/maps/routes-with-aqi', {
+      const response = await fetch('http://127.0.0.1:8001/api/v1/maps/routes-with-aqi', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -327,7 +429,7 @@ const NavigationView = () => {
             prioritize_safety: 0.2,
             max_detour_minutes: 10
           },
-          vehicle_type: vehicleType // Use vehicleType state instead of hardcoded 'car'
+          vehicle_type: vehicleType
         })
       });
 
@@ -335,18 +437,12 @@ const NavigationView = () => {
         const data = await response.json();
         setRoutes(data.routes || []);
         setShowRoutes(true);
-      
-        // Fetch traffic light data for the route
-        await fetchTrafficLightData(
-          { latitude: selectedFromCoords.lat, longitude: selectedFromCoords.lng },
-          { latitude: selectedToCoords.lat, longitude: selectedToCoords.lng }
-        );
+        await fetchTrafficLightData(selectedFromCoords, selectedToCoords);
       } else {
         throw new Error('Failed to fetch routes');
       }
     } catch (error) {
       console.error('Error fetching routes:', error);
-      // Fallback to mock data if API fails
       const mockRoutes = [
         {
           id: '1',
@@ -383,41 +479,72 @@ const NavigationView = () => {
     }
   };
 
-  const selectRoute = (route) => {
-    // Set the selected route to display on the map (preview mode)
-    setSelectedRouteId(route.id);
+  // Calculate Eco-Score after trip completion
+  const calculateEcoScore = useCallback((tripStats) => {
+    // Pollution dose calculation: ∑ (AQI × time spent per segment)
+    const pollutionDose = tripStats.pollutionExposure;
     
-    // Show route selection confirmation (preview mode)
-    alert(`🗺️ Route selected: ${route.name}\n⏱️ ${route.time} min • 🌫️ AQI ${route.aqi}\nRoute is now displayed on the map for preview.`);
+    // Fuel saved calculation: baseline idling × avoided stops
+    const fuelSaved = tripStats.baselineIdling * tripStats.signalsOnGreen * 0.03; // 30ml per green signal
+    
+    // Percentage reduction in pollution exposure
+    const pollutionReduction = tripStats.signalsOnRed > 0 ? 
+      Math.round((tripStats.signalsOnGreen / (tripStats.signalsOnGreen + tripStats.signalsOnRed)) * 100) : 100;
+    
+    return {
+      signalsOnGreen: tripStats.signalsOnGreen,
+      signalsOnRed: tripStats.signalsOnRed,
+      pollutionDose,
+      pollutionReduction,
+      fuelSaved: Math.round(fuelSaved * 1000), // Convert to ml
+      efficiencyScore: Math.round((tripStats.signalsOnGreen / Math.max(1, tripStats.signalsOnGreen + tripStats.signalsOnRed)) * 100)
+    };
+  }, []);
+
+  const selectRoute = (route) => {
+    setSelectedRouteId(route.id);
+    const selectionMessage = `🗺️ Route selected: ${route.name}. Estimated time: ${route.time} minutes. Air quality index: ${route.aqi}. Click "START NAV" to begin turn-by-turn navigation within the app.`;
+    alert(selectionMessage);
+    speakAlert(selectionMessage);
   };
 
   const startNavigation = async (route) => {
-    // Set the selected route to display on the map
-    setSelectedRouteId(route.id);
-    
-    // Initialize navigation state
-    setIsNavigating(true);
-    
-    // Fetch traffic lights along the route if not already fetched
     if (selectedFromCoords && selectedToCoords) {
-      await fetchTrafficLightData(
-        { latitude: selectedFromCoords.lat, longitude: selectedFromCoords.lng },
-        { latitude: selectedToCoords.lat, longitude: selectedToCoords.lng }
-      );
+      setSelectedRouteId(route.id);
+      setIsNavigating(true);
+      setTripLogs([]); // Reset trip logs
+      setEcoScore(null); // Reset eco score
+      setEmergencyAlert(null); // Reset emergency alerts
+      setTripStats({
+        signalsOnGreen: 0,
+        signalsOnRed: 0,
+        totalTime: 0,
+        idlingTime: 0,
+        pollutionExposure: 0,
+        baselineIdling: 0
+      });
+      
+      await fetchTrafficLightData(selectedFromCoords, selectedToCoords);
+      
+      setTimeout(() => {
+        const mapElement = document.getElementById('navigation-map');
+        if (mapElement) {
+          mapElement.scrollIntoView({ behavior: 'smooth' });
+        }
+      }, 100);
+      
+      const startMessage = `🧭 Navigation started! Following route: ${route.name}. Estimated time: ${route.time} minutes. Follow the directions on the map and listen for traffic advisories.`;
+      alert(startMessage);
+      speakAlert(startMessage);
+    } else {
+      const errorMessage = 'Please select valid start and end locations first.';
+      alert(errorMessage);
+      speakAlert(errorMessage);
     }
-    
-    // Scroll to map view
-    setTimeout(() => {
-      const mapElement = document.getElementById('navigation-map');
-      if (mapElement) {
-        mapElement.scrollIntoView({ behavior: 'smooth' });
-      }
-    }, 100);
   };
 
   const calculateDistance = (coord1, coord2) => {
-    // Calculate distance between two coordinates (Haversine formula)
-    const R = 6371; // Earth radius in km
+    const R = 6371;
     const dLat = (coord2.lat - coord1.lat) * Math.PI / 180;
     const dLon = (coord2.lng - coord1.lng) * Math.PI / 180;
     const a = 
@@ -425,11 +552,12 @@ const NavigationView = () => {
       Math.cos(coord1.lat * Math.PI / 180) * Math.cos(coord2.lat * Math.PI / 180) * 
       Math.sin(dLon/2) * Math.sin(dLon/2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-    return R * c; // Distance in km
+    return R * c;
   };
 
   const speakAlert = (text) => {
-    // Text-to-Speech for voice alerts
+    if (!voiceNavigation) return;
+    
     if ('speechSynthesis' in window) {
       const speech = new SpeechSynthesisUtterance(text);
       speech.lang = 'en-US';
@@ -442,75 +570,160 @@ const NavigationView = () => {
     }
   };
 
-  const [isNavigating, setIsNavigating] = useState(false);
-  const [nextSignal, setNextSignal] = useState(null);
-  // const [vehicleSpeed, setVehicleSpeed] = useState(40); // Default speed in km/h - will be used later
+  const speakNavigationInstruction = (instruction) => {
+    speakAlert(`Navigation: ${instruction.text} ${instruction.detail}`);
+  };
 
   // Monitor traffic lights and provide advisories during navigation
   useEffect(() => {
     if (!isNavigating || trafficLights.length === 0 || !selectedFromCoords) return;
     
     const advisoryTimer = setInterval(() => {
-      // Find the next traffic light on the route based on distance, not just time remaining
-      const lightsWithDistance = trafficLights
+      const lightsInRange = trafficLights
         .map(light => {
-          // Calculate distance to this traffic light from start position
-          const distance = calculateDistance(selectedFromCoords, light.coordinates);
-          return { ...light, distance };
+          const referencePosition = userPosition || selectedFromCoords;
+          const distance = calculateDistance(referencePosition, light.coordinates);
+          const distanceMeters = distance * 1000;
+          return { ...light, distance, distanceMeters };
         })
-        .sort((a, b) => a.distance - b.distance);
+        .filter(light => light.distanceMeters >= 200 && light.distanceMeters <= 1000)
+        .sort((a, b) => a.distanceMeters - b.distanceMeters);
       
-      if (lightsWithDistance.length > 0) {
-        const nextLight = lightsWithDistance[0];
-        setNextSignal(nextLight);
+      if (lightsInRange.length > 0) {
+        setNextSignal(lightsInRange[0]);
+      }
+      
+      lightsInRange.slice(0, 3).forEach((light, index) => {
+        const distanceMeters = light.distanceMeters;
+        const timeRemaining = light.current_state.time_remaining;
+        const color = light.current_state.color;
+        const lightId = light.intersection_name || light.light_id || `TF_${index + 1}`;
         
-        const distanceMeters = nextLight.distance * 1000;
-        const timeRemaining = nextLight.current_state.time_remaining;
-        const color = nextLight.current_state.color;
+        // Update trip statistics
+        setTripStats(prev => {
+          const newStats = { ...prev };
+          if (color === 'red') {
+            newStats.signalsOnRed += 1;
+            newStats.idlingTime += timeRemaining;
+          } else if (color === 'green') {
+            newStats.signalsOnGreen += 1;
+          }
+          newStats.pollutionExposure += (getAQIForLocation(light.coordinates) * (timeRemaining / 60)); // AQI * hours
+          return newStats;
+        });
         
-        // Provide advisories based on signal state and timing
+        const recommendedSpeed = calculateRecommendedSpeed(distanceMeters, timeRemaining, color);
+        const mlAdvisory = getMLBasedAdvisory(light, distanceMeters);
+        
+        let advisoryText = '';
         if (color === 'red') {
           if (timeRemaining <= 15 && timeRemaining > 0) {
-            const advisoryText = `⚠️ Red light ahead in ${Math.round(distanceMeters)}m, turns green in ${timeRemaining}s. Slow down to avoid stopping.`;
-            console.log(advisoryText);
-            speakAlert(`Red light ahead in ${Math.round(distanceMeters)} meters, turns green in ${timeRemaining} seconds. Slow down to avoid stopping.`);
+            if (recommendedSpeed) {
+              advisoryText = `${lightId} ${Math.round(distanceMeters)}m ahead changes to green in ${timeRemaining}s. Slow down to ${recommendedSpeed} km/h to avoid waiting. ${mlAdvisory.message}`;
+            } else {
+              advisoryText = `${lightId} ${Math.round(distanceMeters)}m ahead changes to green in ${timeRemaining}s. Slow down to avoid waiting. ${mlAdvisory.message}`;
+            }
           } else if (timeRemaining === 0) {
-            // Red light just turned green
-            const advisoryText = `✅ Red light just turned green! Proceed carefully.`;
-            console.log(advisoryText);
-            speakAlert('Red light just turned green. Proceed carefully.');
+            advisoryText = `${lightId} ${Math.round(distanceMeters)}m ahead turning green now. Proceed carefully.`;
           }
         } else if (color === 'green') {
           if (timeRemaining <= 15 && timeRemaining > 0) {
-            const advisoryText = `⚠️ Green light ahead in ${Math.round(distanceMeters)}m, turns yellow in ${timeRemaining}s. Maintain speed.`;
-            console.log(advisoryText);
-            speakAlert(`Green light ahead in ${Math.round(distanceMeters)} meters, turns yellow in ${timeRemaining} seconds. Maintain speed.`);
+            if (recommendedSpeed) {
+              advisoryText = `${lightId} ${Math.round(distanceMeters)}m ahead turning yellow in ${timeRemaining}s. Maintain speed at ${recommendedSpeed} km/h. ${mlAdvisory.message}`;
+            } else {
+              advisoryText = `${lightId} ${Math.round(distanceMeters)}m ahead turning yellow in ${timeRemaining}s. Maintain speed. ${mlAdvisory.message}`;
+            }
           } else if (timeRemaining === 0) {
-            // Green light just turned yellow
-            const advisoryText = `⚠️ Green light just turned yellow! Prepare to stop.`;
-            console.log(advisoryText);
-            speakAlert('Green light just turned yellow. Prepare to stop.');
+            advisoryText = `${lightId} ${Math.round(distanceMeters)}m ahead turning yellow now. Prepare to stop. ${mlAdvisory.message}`;
           }
         } else if (color === 'yellow') {
           if (timeRemaining > 0) {
-            const advisoryText = `⚠️ Yellow light ahead in ${Math.round(distanceMeters)}m. Prepare to stop.`;
-            console.log(advisoryText);
-            speakAlert(`Yellow light ahead in ${Math.round(distanceMeters)} meters. Prepare to stop.`);
+            advisoryText = `${lightId} ${Math.round(distanceMeters)}m ahead turning red in ${timeRemaining}s. Prepare to stop. ${mlAdvisory.message}`;
           } else {
-            // Yellow light just turned red
-            const advisoryText = `🛑 Yellow light just turned red! Stop if safe to do so.`;
-            console.log(advisoryText);
-            speakAlert('Yellow light just turned red. Stop if safe to do so.');
+            advisoryText = `${lightId} ${Math.round(distanceMeters)}m ahead turned red. Stop if safe to do so. ${mlAdvisory.message}`;
           }
         }
-      }
-    }, 3000); // Check every 3 seconds during navigation
+        
+        if (advisoryText) {
+          console.log(`Traffic Advisory ${index + 1}:`, advisoryText);
+          speakAlert(advisoryText);
+        }
+      });
+    }, 5000);
     
     return () => clearInterval(advisoryTimer);
-  }, [isNavigating, trafficLights, selectedFromCoords]);
+  }, [isNavigating, trafficLights, selectedFromCoords, userPosition, voiceNavigation]);
+
+  // Simulate user position updates during navigation
+  useEffect(() => {
+    if (!isNavigating || !selectedFromCoords || !selectedToCoords) return;
+    
+    const startPosition = { lat: selectedFromCoords.lat, lng: selectedFromCoords.lng };
+    const endPosition = { lat: selectedToCoords.lat, lng: selectedToCoords.lng };
+    
+    let progress = 0;
+    const interval = setInterval(() => {
+      progress += 0.01;
+      if (progress <= 1) {
+        const currentPosition = {
+          lat: startPosition.lat + (endPosition.lat - startPosition.lat) * progress,
+          lng: startPosition.lng + (endPosition.lng - startPosition.lng) * progress
+        };
+        setUserPosition(currentPosition);
+        
+        let newInstruction;
+        if (progress < 0.2) {
+          newInstruction = {
+            icon: '↑',
+            text: 'Continue straight',
+            detail: 'for 200 meters'
+          };
+        } else if (progress < 0.4) {
+          newInstruction = {
+            icon: '➡️',
+            text: 'Turn left',
+            detail: 'at next intersection'
+          };
+        } else if (progress < 0.7) {
+          newInstruction = {
+            icon: '🛣️',
+            text: 'Continue on this road',
+            detail: 'for 500 meters'
+          };
+        } else if (progress < 0.9) {
+          newInstruction = {
+            icon: '⬇️',
+            text: 'Turn right',
+            detail: 'to stay on route'
+          };
+        } else {
+          newInstruction = {
+            icon: '🏁',
+            text: 'You have reached',
+            detail: 'your destination'
+          };
+          
+          // Trip completed - calculate Eco-Score
+          const finalEcoScore = calculateEcoScore(tripStats);
+          setEcoScore(finalEcoScore);
+          speakAlert(`Trip completed! ${finalEcoScore.signalsOnGreen} signals caught green, ${finalEcoScore.pollutionReduction}% lower pollution exposure, ${finalEcoScore.fuelSaved}ml fuel saved.`);
+        }
+        
+        if (newInstruction.text !== currentInstruction.text) {
+          setCurrentInstruction(newInstruction);
+          speakNavigationInstruction(newInstruction);
+        } else {
+          setCurrentInstruction(newInstruction);
+        }
+      } else {
+        clearInterval(interval);
+      }
+    }, 1000);
+    
+    return () => clearInterval(interval);
+  }, [isNavigating, selectedFromCoords, selectedToCoords, currentInstruction, tripStats, calculateEcoScore]);
 
   const toggleFullScreen = () => {
-    // Toggle full-screen mode for navigation
     const element = document.documentElement;
     if (!document.fullscreenElement) {
       if (element.requestFullscreen) {
@@ -524,10 +737,10 @@ const NavigationView = () => {
   };
 
   const getRouteColor = (aqi) => {
-    if (aqi <= 50) return '#10B981'; // Green
-    if (aqi <= 100) return '#F59E0B'; // Yellow
-    if (aqi <= 150) return '#F97316'; // Orange
-    return '#EF4444'; // Red
+    if (aqi <= 50) return '#10B981';
+    if (aqi <= 100) return '#F59E0B';
+    if (aqi <= 150) return '#F97316';
+    return '#EF4444';
   };
 
   const getAQICategory = (aqi) => {
@@ -537,220 +750,490 @@ const NavigationView = () => {
     return 'Unhealthy';
   };
 
-  return (
-    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', backgroundColor: '#f8fafc' }}>
-      {console.log('NavigationView state:', { fromLocation, toLocation, selectedFromCoords, selectedToCoords, showRoutes, routes, selectedRouteId })}
-      {/* Header */}
-      <header style={{ 
-        backgroundColor: '#3B82F6', 
-        color: 'white', 
-        padding: '16px', 
-        boxShadow: '0 2px 4px rgba(0,0,0,0.1)' 
-      }}>
-        <h1 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold' }}>
-          SafeAir Navigator
-        </h1>
-        <p style={{ margin: '4px 0 0 0', fontSize: '14px', opacity: 0.9 }}>
-          Smart navigation with pollution-aware routing
-        </p>
-      </header>
+  const calculateRecommendedSpeed = (distanceMeters, timeToChange, currentState) => {
+    if (currentState === 'green' && timeToChange > 0) {
+      const recommendedSpeed = (distanceMeters / 1000) / (timeToChange / 3600);
+      return Math.max(10, Math.min(60, Math.round(recommendedSpeed)));
+    } else if (currentState === 'red' && timeToChange > 0) {
+      const recommendedSpeed = (distanceMeters / 1000) / (timeToChange / 3600);
+      return Math.max(10, Math.min(40, Math.round(recommendedSpeed)));
+    }
+    return null;
+  };
 
-      {/* Main content area */}
-      <main style={{ flex: 1, padding: '16px', overflowY: 'auto' }}>
-        {/* Route Planning Section */}
+  const getMLBasedAdvisory = (light, distanceMeters, userSpeed = 40) => {
+    const { current_state, time_remaining } = light;
+    const color = current_state.color;
+    const timeToReach = (distanceMeters / 1000) / (userSpeed / 3600);
+    
+    let recommendation = {};
+    
+    if (color === 'red') {
+      if (timeToReach < time_remaining - 5) {
+        recommendation = {
+          action: 'slow_down',
+          message: 'Slow down to reduce fuel consumption while waiting',
+          speedAdjustment: -10
+        };
+      } else if (timeToReach > time_remaining + 10) {
+        recommendation = {
+          action: 'maintain_speed',
+          message: 'Maintain current speed, light will be green when you arrive',
+          speedAdjustment: 0
+        };
+      } else {
+        recommendation = {
+          action: 'optimal_approach',
+          message: 'Approach at optimal speed to catch the green light',
+          speedAdjustment: 5
+        };
+      }
+    } else if (color === 'green') {
+      if (timeToReach < time_remaining * 0.8) {
+        recommendation = {
+          action: 'maintain_speed',
+          message: 'Maintain current speed, you\'ll clear the intersection comfortably',
+          speedAdjustment: 0
+        };
+      } else if (timeToReach > time_remaining * 1.2) {
+        recommendation = {
+          action: 'slight_acceleration',
+          message: 'Slight acceleration to clear intersection before yellow light',
+          speedAdjustment: 5
+        };
+      } else {
+        recommendation = {
+          action: 'optimal_approach',
+          message: 'Current approach is optimal for green light clearance',
+          speedAdjustment: 0
+        };
+      }
+    } else if (color === 'yellow') {
+      if (timeToReach < time_remaining * 0.7) {
+        recommendation = {
+          action: 'maintain_speed',
+          message: 'Maintain speed to clear intersection before red light',
+          speedAdjustment: 0
+        };
+      } else {
+        recommendation = {
+          action: 'prepare_to_stop',
+          message: 'Prepare to stop safely before the intersection',
+          speedAdjustment: -20
+        };
+      }
+    }
+    
+    return recommendation;
+  };
+
+  const getAQIForLocation = (coordinates) => {
+    // Mock AQI values for demonstration
+    const mockAQIValues = [
+      { coordinates: { lat: 28.6315, lng: 77.2167 }, aqi: 120 },
+      { coordinates: { lat: 28.6280, lng: 77.2410 }, aqi: 180 },
+      { coordinates: { lat: 28.6129, lng: 77.2295 }, aqi: 90 }
+    ];
+    
+    // Find the two closest AQI sensors
+    const sortedSensors = mockAQIValues.sort((a, b) => 
+      calculateDistance(coordinates, a.coordinates) - calculateDistance(coordinates, b.coordinates)
+    );
+    
+    if (sortedSensors.length >= 2) {
+      return interpolateAQI(coordinates, sortedSensors[0], sortedSensors[1]);
+    }
+    
+    return sortedSensors[0] ? sortedSensors[0].aqi : 100;
+  };
+
+  const getCurrentLocation = () => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          const { latitude, longitude } = position.coords;
+          const userLoc = { lat: latitude, lng: longitude };
+          setUserLocation(userLoc);
+          setMapCenter(userLoc);
+          setFromLocation('Current Location');
+          setSelectedFromCoords(userLoc);
+        },
+        (error) => {
+          console.error('Error getting location:', error);
+          alert('Unable to get your location. Please enter manually.');
+        }
+      );
+    } else {
+      alert('Geolocation is not supported by this browser.');
+    }
+  };
+
+  useEffect(() => {
+    getCurrentLocation();
+  }, []);
+
+  return (
+    <div style={{ 
+      height: '100vh', 
+      display: 'flex', 
+      flexDirection: 'column', 
+      backgroundColor: '#f8fafc',
+      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif'
+    }}>
+      <header style={{ 
+        background: 'linear-gradient(135deg, #3B82F6 0%, #1D4ED8 100%)', 
+        color: 'white', 
+        padding: '20px 24px', 
+        boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
+        position: 'relative'
+      }}>
+        <div style={{ 
+          display: 'flex', 
+          justifyContent: 'space-between', 
+          alignItems: 'center',
+          maxWidth: '1400px',
+          margin: '0 auto'
+        }}>
+          <div>
+            <h1 style={{ 
+              margin: 0, 
+              fontSize: '24px', 
+              fontWeight: '700',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '12px'
+            }}>
+              <span style={{ fontSize: '28px' }}>🧭</span>
+              SafeAir Navigator
+            </h1>
+            <p style={{ 
+              margin: '4px 0 0 0', 
+              fontSize: '15px', 
+              opacity: 0.9,
+              fontWeight: '400'
+            }}>
+              Smart navigation with pollution-aware routing
+            </p>
+          </div>
+          
+          <div style={{ display: 'flex', gap: '12px' }}>
+            <button
+              onClick={getCurrentLocation}
+              style={{
+                backgroundColor: 'rgba(255,255,255,0.2)',
+                color: 'white',
+                border: '1px solid rgba(255,255,255,0.3)',
+                padding: '8px 16px',
+                borderRadius: '8px',
+                fontSize: '14px',
+                fontWeight: '500',
+                cursor: 'pointer',
+                backdropFilter: 'blur(10px)',
+                transition: 'background-color 0.3s ease'
+              }}
+              onMouseEnter={(e) => e.target.style.backgroundColor = 'rgba(255,255,255,0.3)'}
+              onMouseLeave={(e) => e.target.style.backgroundColor = 'rgba(255,255,255,0.2)'}
+            >
+              Use Current Location
+            </button>
+            <button
+              onClick={toggleFullScreen}
+              style={{
+                backgroundColor: 'rgba(255,255,255,0.2)',
+                color: 'white',
+                border: '1px solid rgba(255,255,255,0.3)',
+                padding: '8px 16px',
+                borderRadius: '8px',
+                fontSize: '14px',
+                fontWeight: '500',
+                cursor: 'pointer',
+                backdropFilter: 'blur(10px)',
+                transition: 'background-color 0.3s ease'
+              }}
+              onMouseEnter={(e) => e.target.style.backgroundColor = 'rgba(255,255,255,0.3)'}
+              onMouseLeave={(e) => e.target.style.backgroundColor = 'rgba(255,255,255,0.2)'}
+            >
+              Full Screen
+            </button>
+          </div>
+        </div>
+      </header>
+      
+      <main style={{ 
+        flex: 1, 
+        padding: '24px', 
+        overflowY: 'auto',
+        maxWidth: '1400px',
+        margin: '0 auto',
+        width: '100%'
+      }}>
         {!isNavigating && (
           <div style={{ 
             backgroundColor: 'white', 
-            padding: '20px', 
-            borderRadius: '12px', 
-            marginBottom: '16px',
-            boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
+            padding: '28px', 
+            borderRadius: '16px', 
+            marginBottom: '24px',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
+            border: '1px solid #e5e7eb'
           }}>
-            <h2 style={{ marginTop: 0, marginBottom: '16px', color: '#1f2937' }}>Plan Your Route</h2>
-            
-            <div style={{ marginBottom: '16px', position: 'relative' }}>
-              <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', color: '#374151' }}>
-                📍 From:
-              </label>
-              <input
-                ref={fromInputRef}
-                type="text"
-                value={fromLocation}
-                onChange={handleFromLocationChange}
-                onFocus={() => setShowFromSuggestions(true)}
-                placeholder="Enter starting location (e.g., Connaught Place, Delhi)"
-                style={{
-                  width: '100%',
-                  padding: '12px',
-                  border: '2px solid #e5e7eb',
-                  borderRadius: '8px',
-                  fontSize: '16px',
-                  outline: 'none',
-                  transition: 'border-color 0.2s'
-                }}
-              />
-              
-              {/* Autocomplete Dropdown for From Location */}
-              {showFromSuggestions && fromSuggestions.length > 0 && (
-                <div style={{
-                  position: 'absolute',
-                  top: '100%',
-                  left: 0,
-                  right: 0,
-                  backgroundColor: 'white',
-                  border: '1px solid #e5e7eb',
-                  borderRadius: '8px',
-                  boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-                  zIndex: 1000,
-                  maxHeight: '200px',
-                  overflowY: 'auto'
+            <div style={{ 
+              display: 'flex', 
+              justifyContent: 'space-between', 
+              alignItems: 'center',
+              marginBottom: '24px'
+            }}>
+              <h2 style={{ 
+                margin: 0, 
+                color: '#1f2937',
+                fontSize: '22px',
+                fontWeight: '600'
+              }}>
+                Plan Your Journey
+              </h2>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <label style={{ 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  gap: '8px', 
+                  fontSize: '14px',
+                  color: '#4b5563',
+                  fontWeight: '500'
                 }}>
-                  {console.log('Rendering from suggestions:', fromSuggestions)}
-                  {fromSuggestions.map((suggestion, index) => (
-                    <div
-                      key={index}
-                      data-suggestion-item="true"
-                      onClick={() => selectFromLocation(suggestion)}
-                      style={{
-                        padding: '12px',
-                        cursor: 'pointer',
-                        borderBottom: index < fromSuggestions.length - 1 ? '1px solid #f3f4f6' : 'none',
-                        fontSize: '14px',
-                        color: '#374151'
-                      }}
-                      onMouseEnter={(e) => e.target.style.backgroundColor = '#f9fafb'}
-                      onMouseLeave={(e) => e.target.style.backgroundColor = 'white'}
-                    >
-                      📍 {suggestion.description}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div style={{ marginBottom: '16px', position: 'relative' }}>
-              <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', color: '#374151' }}>
-                🎯 To:
-              </label>
-              <input
-                ref={toInputRef}
-                type="text"
-                value={toLocation}
-                onChange={handleToLocationChange}
-                onFocus={() => setShowToSuggestions(true)}
-                placeholder="Enter destination (e.g., India Gate, Delhi)"
-                style={{
-                  width: '100%',
-                  padding: '12px',
-                  border: '2px solid #e5e7eb',
-                  borderRadius: '8px',
-                  fontSize: '16px',
-                  outline: 'none',
-                  transition: 'border-color 0.2s'
-                }}
-              />
-              
-              {/* Autocomplete Dropdown for To Location */}
-              {showToSuggestions && toSuggestions.length > 0 && (
-                <div style={{
-                  position: 'absolute',
-                  top: '100%',
-                  left: 0,
-                  right: 0,
-                  backgroundColor: 'white',
-                  border: '1px solid #e5e7eb',
-                  borderRadius: '8px',
-                  boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-                  zIndex: 1000,
-                  maxHeight: '200px',
-                  overflowY: 'auto'
-                }}>
-                  {console.log('Rendering to suggestions:', toSuggestions)}
-                  {toSuggestions.map((suggestion, index) => (
-                    <div
-                      key={index}
-                      data-suggestion-item="true"
-                      onClick={() => selectToLocation(suggestion)}
-                      style={{
-                        padding: '12px',
-                        cursor: 'pointer',
-                        borderBottom: index < toSuggestions.length - 1 ? '1px solid #f3f4f6' : 'none',
-                        fontSize: '14px',
-                        color: '#374151'
-                      }}
-                      onMouseEnter={(e) => e.target.style.backgroundColor = '#f9fafb'}
-                      onMouseLeave={(e) => e.target.style.backgroundColor = 'white'}
-                    >
-                      🎯 {suggestion.description}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Vehicle Type Selection */}
-            <div style={{ marginBottom: '20px' }}>
-              <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600', color: '#374151' }}>
-                🚗 Vehicle Type:
-              </label>
-              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                {[
-                  { value: 'bike', label: '🏍️ Bike' },
-                  { value: 'auto', label: '🛺 Auto' },
-                  { value: 'car', label: '🚗 Car' },
-                  { value: 'bus', label: '🚌 Bus' }
-                ].map((option) => (
-                  <button
-                    key={option.value}
-                    onClick={() => setVehicleType(option.value)}
-                    style={{
-                      padding: '8px 12px',
-                      border: `2px solid ${vehicleType === option.value ? '#3B82F6' : '#e5e7eb'}`,
-                      borderRadius: '8px',
-                      backgroundColor: vehicleType === option.value ? '#eff6ff' : 'white',
-                      color: vehicleType === option.value ? '#3B82F6' : '#6b7280',
-                      cursor: 'pointer',
-                      fontSize: '14px',
-                      fontWeight: '500',
-                      transition: 'all 0.2s'
-                    }}
-                  >
-                    {option.label}
-                  </button>
-                ))}
+                  <input
+                    type="checkbox"
+                    checked={voiceNavigation}
+                    onChange={(e) => setVoiceNavigation(e.target.checked)}
+                    style={{ width: '16px', height: '16px' }}
+                  />
+                  Voice Navigation
+                </label>
               </div>
             </div>
 
-            {/* Route Preferences */}
-            <div style={{ marginBottom: '20px' }}>
-              <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600', color: '#374151' }}>
-                ⚙️ Route Preference:
-              </label>
-              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                {[
-                  { value: 'fastest', label: '⚡ Fastest', desc: 'Minimize travel time' },
-                  { value: 'cleanest', label: '🌱 Cleanest', desc: 'Low pollution exposure' },
-                  { value: 'balanced', label: '⚖️ Balanced', desc: 'Time + air quality' }
-                ].map((option) => (
-                  <button
-                    key={option.value}
-                    onClick={() => setRoutePreference(option.value)}
+            <div style={{ 
+              display: 'grid', 
+              gridTemplateColumns: '1fr auto 1fr', 
+              gap: '16px', 
+              alignItems: 'end',
+              marginBottom: '24px'
+            }}>
+              <div style={{ position: 'relative' }}>
+                <label style={{ 
+                  display: 'block', 
+                  marginBottom: '8px', 
+                  fontSize: '14px',
+                  fontWeight: '500',
+                  color: '#374151'
+                }}>
+                  From
+                </label>
+                <div style={{ position: 'relative' }}>
+                  <input
+                    ref={fromInputRef}
+                    type="text"
+                    value={fromLocation}
+                    onChange={handleFromLocationChange}
+                    placeholder="Enter starting location"
                     style={{
-                      padding: '8px 12px',
-                      border: `2px solid ${routePreference === option.value ? '#3B82F6' : '#e5e7eb'}`,
+                      width: '100%',
+                      padding: '12px 16px',
+                      border: '1px solid #d1d5db',
                       borderRadius: '8px',
-                      backgroundColor: routePreference === option.value ? '#eff6ff' : 'white',
-                      color: routePreference === option.value ? '#3B82F6' : '#6b7280',
-                      cursor: 'pointer',
-                      fontSize: '14px',
-                      fontWeight: '500',
-                      transition: 'all 0.2s'
+                      fontSize: '16px',
+                      outline: 'none',
+                      transition: 'border-color 0.2s ease'
                     }}
-                  >
-                    <div>{option.label}</div>
-                    <div style={{ fontSize: '12px', opacity: 0.8 }}>{option.desc}</div>
-                  </button>
-                ))}
+                    onFocus={() => setShowFromSuggestions(true)}
+                  />
+                  {showFromSuggestions && fromSuggestions.length > 0 && (
+                    <div style={{
+                      position: 'absolute',
+                      top: '100%',
+                      left: 0,
+                      right: 0,
+                      backgroundColor: 'white',
+                      border: '1px solid #d1d5db',
+                      borderRadius: '8px',
+                      marginTop: '4px',
+                      maxHeight: '200px',
+                      overflowY: 'auto',
+                      zIndex: 100,
+                      boxShadow: '0 4px 6px rgba(0,0,0,0.1)'
+                    }}>
+                      {fromSuggestions.map((suggestion, index) => (
+                        <div
+                          key={index}
+                          data-suggestion-item
+                          onClick={() => selectFromLocation(suggestion)}
+                          style={{
+                            padding: '12px 16px',
+                            cursor: 'pointer',
+                            borderBottom: index < fromSuggestions.length - 1 ? '1px solid #e5e7eb' : 'none',
+                            fontSize: '14px',
+                            transition: 'background-color 0.2s ease'
+                          }}
+                          onMouseEnter={(e) => e.target.style.backgroundColor = '#f3f4f6'}
+                          onMouseLeave={(e) => e.target.style.backgroundColor = 'white'}
+                        >
+                          {suggestion.description}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <button
+                onClick={swapLocations}
+                style={{
+                  padding: '12px',
+                  backgroundColor: '#3B82F6',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                  height: '44px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  transition: 'background-color 0.2s ease'
+                }}
+                onMouseEnter={(e) => e.target.style.backgroundColor = '#2563EB'}
+                onMouseLeave={(e) => e.target.style.backgroundColor = '#3B82F6'}
+              >
+                <span style={{ fontSize: '18px' }}>⇄</span>
+              </button>
+
+              <div style={{ position: 'relative' }}>
+                <label style={{ 
+                  display: 'block', 
+                  marginBottom: '8px', 
+                  fontSize: '14px',
+                  fontWeight: '500',
+                  color: '#374151'
+                }}>
+                  To
+                </label>
+                <div style={{ position: 'relative' }}>
+                  <input
+                    ref={toInputRef}
+                    type="text"
+                    value={toLocation}
+                    onChange={handleToLocationChange}
+                    placeholder="Enter destination"
+                    style={{
+                      width: '100%',
+                      padding: '12px 16px',
+                      border: '1px solid #d1d5db',
+                      borderRadius: '8px',
+                      fontSize: '16px',
+                      outline: 'none',
+                      transition: 'border-color 0.2s ease'
+                    }}
+                    onFocus={() => setShowToSuggestions(true)}
+                  />
+                  {showToSuggestions && toSuggestions.length > 0 && (
+                    <div style={{
+                      position: 'absolute',
+                      top: '100%',
+                      left: 0,
+                      right: 0,
+                      backgroundColor: 'white',
+                      border: '1px solid #d1d5db',
+                      borderRadius: '8px',
+                      marginTop: '4px',
+                      maxHeight: '200px',
+                      overflowY: 'auto',
+                      zIndex: 100,
+                      boxShadow: '0 4px 6px rgba(0,0,0,0.1)'
+                    }}>
+                      {toSuggestions.map((suggestion, index) => (
+                        <div
+                          key={index}
+                          data-suggestion-item
+                          onClick={() => selectToLocation(suggestion)}
+                          style={{
+                            padding: '12px 16px',
+                            cursor: 'pointer',
+                            borderBottom: index < toSuggestions.length - 1 ? '1px solid #e5e7eb' : 'none',
+                            fontSize: '14px',
+                            transition: 'background-color 0.2s ease'
+                          }}
+                          onMouseEnter={(e) => e.target.style.backgroundColor = '#f3f4f6'}
+                          onMouseLeave={(e) => e.target.style.backgroundColor = 'white'}
+                        >
+                          {suggestion.description}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div style={{ 
+              display: 'grid', 
+              gridTemplateColumns: '1fr 1fr', 
+              gap: '16px',
+              marginBottom: '24px'
+            }}>
+              <div>
+                <label style={{ 
+                  display: 'block', 
+                  marginBottom: '8px', 
+                  fontSize: '14px',
+                  fontWeight: '500',
+                  color: '#374151'
+                }}>
+                  Route Preference
+                </label>
+                <select
+                  value={routePreference}
+                  onChange={(e) => setRoutePreference(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: '12px 16px',
+                    border: '1px solid #d1d5db',
+                    borderRadius: '8px',
+                    fontSize: '16px',
+                    outline: 'none',
+                    backgroundColor: 'white'
+                  }}
+                >
+                  <option value="fastest">Fastest Route</option>
+                  <option value="balanced">Balanced Route</option>
+                  <option value="cleanest">Cleanest Air Route</option>
+                </select>
+              </div>
+
+              <div>
+                <label style={{ 
+                  display: 'block', 
+                  marginBottom: '8px', 
+                  fontSize: '14px',
+                  fontWeight: '500',
+                  color: '#374151'
+                }}>
+                  Vehicle Type
+                </label>
+                <select
+                  value={vehicleType}
+                  onChange={(e) => setVehicleType(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: '12px 16px',
+                    border: '1px solid #d1d5db',
+                    borderRadius: '8px',
+                    fontSize: '16px',
+                    outline: 'none',
+                    backgroundColor: 'white'
+                  }}
+                >
+                  <option value="car">Car</option>
+                  <option value="bike">Bike</option>
+                  <option value="bus">Bus</option>
+                  <option value="truck">Truck</option>
+                </select>
               </div>
             </div>
 
@@ -758,376 +1241,591 @@ const NavigationView = () => {
               onClick={handleRouteSearch}
               disabled={isLoading}
               style={{
-                backgroundColor: isLoading ? '#9ca3af' : '#10B981',
+                width: '100%',
+                padding: '14px',
+                backgroundColor: isLoading ? '#9CA3AF' : '#3B82F6',
                 color: 'white',
-                padding: '14px 24px',
                 border: 'none',
                 borderRadius: '8px',
                 fontSize: '16px',
                 fontWeight: '600',
                 cursor: isLoading ? 'not-allowed' : 'pointer',
-                width: '100%',
-                transition: 'background-color 0.2s'
+                transition: 'background-color 0.2s ease',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '8px'
+              }}
+              onMouseEnter={(e) => {
+                if (!isLoading) e.target.style.backgroundColor = '#2563EB';
+              }}
+              onMouseLeave={(e) => {
+                if (!isLoading) e.target.style.backgroundColor = '#3B82F6';
               }}
             >
-              {isLoading ? '🔍 Finding Routes...' : '🚀 Find Smart Routes'}
+              {isLoading ? (
+                <>
+                  <span>🔍</span> Finding best routes...
+                </>
+              ) : (
+                <>
+                  <span>🔍</span> Find Routes
+                </>
+              )}
             </button>
           </div>
         )}
 
-        {/* Route Results */}
-        {showRoutes && routes.length > 0 && !isNavigating && (
+        {showRoutes && !isNavigating && (
           <div style={{ 
             backgroundColor: 'white', 
-            padding: '20px', 
-            borderRadius: '12px',
-            marginBottom: '16px',
-            boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
+            padding: '24px', 
+            borderRadius: '16px', 
+            marginBottom: '24px',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
+            border: '1px solid #e5e7eb'
           }}>
-            <h3 style={{ marginTop: 0, marginBottom: '16px', color: '#1f2937' }}>
-              🗺️ Route Options
-            </h3>
+            <h2 style={{ 
+              margin: '0 0 20px 0', 
+              color: '#1f2937',
+              fontSize: '20px',
+              fontWeight: '600'
+            }}>
+              Available Routes
+            </h2>
             
-            {routes.map((route, index) => (
-              <div
-                key={route.id}
-                onClick={() => selectRoute(route)}
-                style={{
-                  border: `2px solid ${getRouteColor(route.aqi)}`,
-                  borderRadius: '12px',
-                  padding: '16px',
-                  marginBottom: '12px',
-                  cursor: 'pointer',
-                  transition: 'all 0.2s',
-                  backgroundColor: index === 0 ? '#f0fdf4' : 'white'
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
-                  <div>
-                    <h4 style={{ margin: 0, color: '#1f2937', fontSize: '16px', fontWeight: '600' }}>
-                      {route.name}
-                      {index === 0 && <span style={{ 
-                        marginLeft: '8px', 
-                        backgroundColor: '#10B981', 
-                        color: 'white', 
-                        padding: '2px 8px', 
-                        borderRadius: '12px', 
-                        fontSize: '12px' 
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '20px' }}>
+              {routes.map((route) => (
+                <div 
+                  key={route.id}
+                  onClick={() => selectRoute(route)}
+                  style={{
+                    border: selectedRouteId === route.id ? '2px solid #3B82F6' : '1px solid #e5e7eb',
+                    borderRadius: '12px',
+                    padding: '20px',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s ease',
+                    backgroundColor: selectedRouteId === route.id ? '#EFF6FF' : 'white'
+                  }}
+                  onMouseEnter={(e) => {
+                    if (selectedRouteId !== route.id) e.target.style.boxShadow = '0 4px 8px rgba(0,0,0,0.08)';
+                  }}
+                  onMouseLeave={(e) => {
+                    if (selectedRouteId !== route.id) e.target.style.boxShadow = 'none';
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
+                    <div>
+                      <h3 style={{ 
+                        margin: '0 0 8px 0', 
+                        fontSize: '18px',
+                        fontWeight: '600',
+                        color: '#1f2937'
                       }}>
-                        RECOMMENDED
-                      </span>}
-                    </h4>
-                    <p style={{ margin: '4px 0 0 0', color: '#6b7280', fontSize: '14px' }}>
-                      {route.distance} km • {route.type} route
-                    </p>
-                  </div>
-                  <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontSize: '18px', fontWeight: '700', color: '#1f2937' }}>
-                      {route.time} min
+                        {route.name}
+                      </h3>
+                      <p style={{ 
+                        margin: 0, 
+                        fontSize: '14px',
+                        color: '#6b7280'
+                      }}>
+                        {route.description}
+                      </p>
+                    </div>
+                    <div style={{ 
+                      backgroundColor: getRouteColor(route.aqi),
+                      color: 'white',
+                      padding: '4px 8px',
+                      borderRadius: '12px',
+                      fontSize: '12px',
+                      fontWeight: '600'
+                    }}>
+                      {getAQICategory(route.aqi)}
                     </div>
                   </div>
-                </div>
-                
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span style={{ fontSize: '14px', color: '#6b7280' }}>Air Quality:</span>
-                    <span style={{ 
-                      backgroundColor: getRouteColor(route.aqi), 
-                      color: 'white', 
-                      padding: '4px 8px', 
-                      borderRadius: '6px', 
-                      fontSize: '12px', 
-                      fontWeight: '600' 
-                    }}>
-                      AQI {route.aqi} • {getAQICategory(route.aqi)}
-                    </span>
+                  
+                  <div style={{ 
+                    display: 'grid', 
+                    gridTemplateColumns: 'repeat(3, 1fr)', 
+                    gap: '12px',
+                    marginBottom: '16px'
+                  }}>
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{ 
+                        fontSize: '20px',
+                        fontWeight: '700',
+                        color: '#1f2937'
+                      }}>
+                        {route.time}
+                      </div>
+                      <div style={{ 
+                        fontSize: '12px',
+                        color: '#6b7280'
+                      }}>
+                        mins
+                      </div>
+                    </div>
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{ 
+                        fontSize: '20px',
+                        fontWeight: '700',
+                        color: '#1f2937'
+                      }}>
+                        {route.distance}
+                      </div>
+                      <div style={{ 
+                        fontSize: '12px',
+                        color: '#6b7280'
+                      }}>
+                        km
+                      </div>
+                    </div>
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{ 
+                        fontSize: '20px',
+                        fontWeight: '700',
+                        color: '#1f2937'
+                      }}>
+                        {route.aqi}
+                      </div>
+                      <div style={{ 
+                        fontSize: '12px',
+                        color: '#6b7280'
+                      }}>
+                        AQI
+                      </div>
+                    </div>
                   </div>
-                  <button 
+                  
+                  <button
                     onClick={(e) => {
-                      e.stopPropagation(); // Prevent triggering the parent click handler
+                      e.stopPropagation();
                       startNavigation(route);
                     }}
                     style={{
-                      backgroundColor: '#3B82F6',
+                      width: '100%',
+                      padding: '10px',
+                      backgroundColor: '#10B981',
                       color: 'white',
                       border: 'none',
-                      padding: '6px 12px',
-                      borderRadius: '6px',
-                      fontSize: '12px',
+                      borderRadius: '8px',
+                      fontSize: '14px',
                       fontWeight: '600',
-                      cursor: 'pointer'
+                      cursor: 'pointer',
+                      transition: 'background-color 0.2s ease'
                     }}
+                    onMouseEnter={(e) => e.target.style.backgroundColor = '#059669'}
+                    onMouseLeave={(e) => e.target.style.backgroundColor = '#10B981'}
                   >
-                    SELECT
+                    START NAV
                   </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Traffic Light Advisories */}
-        {selectedRouteId && trafficLights.length > 0 && !isNavigating && (
-          <div style={{ 
-            backgroundColor: '#eff6ff', 
-            padding: '16px', 
-            borderRadius: '12px',
-            marginBottom: '16px',
-            boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
-          }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-              <h4 style={{ margin: 0, color: '#1f2937' }}>
-                🚦 Traffic Light Advisories
-              </h4>
-              <span style={{ fontSize: '12px', color: '#6b7280' }}>
-                Updated in real-time
-              </span>
-            </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
-              {trafficLights
-                .filter(light => light.current_state.time_remaining > 0 && light.current_state.time_remaining <= 30)
-                .map((light, index) => (
-                  <div key={index} style={{
-                    backgroundColor: 'white',
-                    padding: '12px',
-                    borderRadius: '8px',
-                    border: '1px solid #d1d5db',
-                    minWidth: '200px'
-                  }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                      <span style={{ fontWeight: '600', color: '#1f2937' }}>{light.intersection_name}</span>
-                      <span style={{
-                        backgroundColor: light.current_state.color === 'red' ? '#ef4444' : 
-                                       light.current_state.color === 'yellow' ? '#f59e0b' : '#10b981',
-                        color: 'white',
-                        padding: '2px 8px',
-                        borderRadius: '12px',
-                        fontSize: '12px'
-                      }}>
-                        {light.current_state.color.toUpperCase()}
-                      </span>
-                    </div>
-                    <div style={{ fontSize: '14px', color: '#6b7280' }}>
-                      <span>⏱️ {light.current_state.time_remaining}s remaining</span>
-                    </div>
-                    <div style={{ marginTop: '8px', fontSize: '12px', color: '#3b82f6', fontStyle: 'italic', fontWeight: '600' }}>
-                      {light.current_state.color === 'red' && light.current_state.time_remaining <= 10 && '⚠️ Prepare to stop'}
-                      {light.current_state.color === 'green' && light.current_state.time_remaining <= 15 && '✅ Maintain current speed'}
-                      {light.current_state.color === 'yellow' && '⚠️ Prepare to stop'}
-                      {light.current_state.color === 'red' && light.current_state.time_remaining > 10 && '⏱️ Wait for green'}
-                    </div>
-                  </div>
-                ))
-              }
-            </div>
-          </div>
-        )}
-
-        {/* Floating Traffic Light Advisory (during navigation) */}
-        {isNavigating && nextSignal && (
-          <div style={{
-            position: 'fixed',
-            bottom: '20px',
-            left: '50%',
-            transform: 'translateX(-50%)',
-            backgroundColor: nextSignal.current_state.color === 'red' ? '#ef4444' : 
-                           nextSignal.current_state.color === 'yellow' ? '#f59e0b' : '#10b981',
-            color: 'white',
-            padding: '16px',
-            borderRadius: '12px',
-            boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
-            zIndex: 1000,
-            maxWidth: '90%',
-            textAlign: 'center'
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px' }}>
-              <span style={{ fontSize: '24px' }}>
-                {nextSignal.current_state.color === 'red' ? '🔴' : 
-                 nextSignal.current_state.color === 'yellow' ? '🟡' : '🟢'}
-              </span>
-              <div>
-                <div style={{ fontWeight: 'bold', fontSize: '16px' }}>
-                  Next Signal: {nextSignal.intersection_name || nextSignal.signal_id}
-                </div>
-                <div style={{ fontSize: '14px' }}>
-                  {Math.round(nextSignal.distance * 1000)}m ahead • 
-                  {nextSignal.current_state.time_remaining > 0 ? 
-                    ` Changes in ${nextSignal.current_state.time_remaining}s` : 
-                    ` Just changed to ${nextSignal.current_state.color}`}
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Map Display */}
-        {selectedRouteId && (
-          <div 
-            id="navigation-map"
-            style={{ 
-              backgroundColor: 'white', 
-              padding: '20px', 
-              borderRadius: '12px',
-              marginBottom: '16px',
-              boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
-              height: isNavigating ? '80vh' : 'auto'
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h3 style={{ margin: 0, color: '#1f2937' }}>
-                {isNavigating ? '🧭 Navigation' : '🗺️ Route Preview'}
-              </h3>
-              <div>
-                {isNavigating && (
-                  <button 
-                    onClick={() => setIsNavigating(false)}
-                    style={{
-                      backgroundColor: '#EF4444',
-                      color: 'white',
-                      border: 'none',
-                      padding: '6px 12px',
-                      borderRadius: '6px',
-                      fontSize: '12px',
-                      fontWeight: '600',
-                  cursor: 'pointer',
-                      marginRight: '8px'
-                    }}
-                  >
-                    Exit Navigation
-                  </button>
-                )}
-                <button 
-                  onClick={toggleFullScreen}
-                  style={{
-                    backgroundColor: '#3B82F6',
-                    color: 'white',
-                    border: 'none',
-                    padding: '6px 12px',
-                    borderRadius: '6px',
-                    fontSize: '12px',
-                    fontWeight: '600',
-                    cursor: 'pointer'
-                  }}
-                >
-                  {document.fullscreenElement ? 'Exit Full Screen' : 'Full Screen'}
-                </button>
-              </div>
-            </div>
-            {console.log('Passing to MapComponent - fromCoords:', selectedFromCoords, 'toCoords:', selectedToCoords)}
-            <MapComponent 
-              fromCoords={selectedFromCoords}
-              toCoords={selectedToCoords}
-              selectedRoute={routes.find(r => r.id === selectedRouteId) || null}
-              trafficLights={trafficLights}
-              isFullScreen={!!document.fullscreenElement}
-              isNavigating={isNavigating}
-            />
-          </div>
-        )}
-
-        {/* Features Section */}
-        {!isNavigating && (
-          <div style={{ 
-            backgroundColor: 'white', 
-            padding: '20px', 
-            borderRadius: '12px',
-            boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
-          }}>
-            <h3 style={{ marginTop: 0, marginBottom: '16px', color: '#1f2937' }}>✨ Smart Features</h3>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px' }}>
-              {[
-                { icon: '🚦', title: 'Green Wave Sync', desc: 'Coordinated traffic signals' },
-                { icon: '🌱', title: 'Clean Air Routes', desc: 'Minimize pollution exposure' },
-                { icon: '📱', title: 'Smart Alerts', desc: 'Real-time notifications' },
-                { icon: '🚨', title: 'Emergency Alerts', desc: 'Instant rerouting' },
-                { icon: '📊', title: 'Impact Tracking', desc: 'Environmental benefits' },
-                { icon: '🎯', title: 'Predictive AI', desc: 'Traffic & incident prediction' }
-              ].map((feature, index) => (
-                <div key={index} style={{
-                  padding: '12px',
-                  border: '1px solid #e5e7eb',
-                  borderRadius: '8px',
-                  textAlign: 'center'
-                }}>
-                  <div style={{ fontSize: '24px', marginBottom: '4px' }}>{feature.icon}</div>
-                  <div style={{ fontSize: '14px', fontWeight: '600', color: '#1f2937', marginBottom: '2px' }}>
-                    {feature.title}
-                  </div>
-                  <div style={{ fontSize: '12px', color: '#6b7280' }}>
-                    {feature.desc}
-                  </div>
                 </div>
               ))}
             </div>
           </div>
         )}
 
-        {/* Bottom navigation */}
-        {!isNavigating && (
-          <nav style={{ 
+        {isNavigating && (
+          <div style={{ 
             backgroundColor: 'white', 
-            borderTop: '1px solid #e5e7eb', 
-            padding: '12px 16px',
-            boxShadow: '0 -2px 8px rgba(0,0,0,0.1)'
+            padding: '24px', 
+            borderRadius: '16px', 
+            marginBottom: '24px',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
+            border: '1px solid #e5e7eb'
           }}>
-            <div style={{ display: 'flex', justifyContent: 'space-around' }}>
+            <div style={{ 
+              display: 'flex', 
+              justifyContent: 'space-between', 
+              alignItems: 'center',
+              marginBottom: '20px'
+            }}>
+              <h2 style={{ 
+                margin: 0, 
+                color: '#1f2937',
+                fontSize: '20px',
+                fontWeight: '600'
+              }}>
+                Navigation in Progress
+              </h2>
               <button
-                onClick={() => handleNavigation('/')}
+                onClick={() => setIsNavigating(false)}
                 style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  background: 'none',
+                  padding: '8px 16px',
+                  backgroundColor: '#EF4444',
+                  color: 'white',
                   border: 'none',
-                  color: '#3B82F6',
-                  cursor: 'pointer',
-                  padding: '8px 12px',
                   borderRadius: '8px',
-                  fontWeight: '600'
-                }}
-              >
-                <span style={{ fontSize: '20px', marginBottom: '2px' }}>🧭</span>
-                <span style={{ fontSize: '12px' }}>Navigate</span>
-              </button>
-              <button
-                onClick={() => handleNavigation('/dashboard')}
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  background: 'none',
-                  border: 'none',
-                  color: '#6B7280',
+                  fontSize: '14px',
+                  fontWeight: '600',
                   cursor: 'pointer',
-                  padding: '8px 12px',
-                  borderRadius: '8px'
+                  transition: 'background-color 0.2s ease'
                 }}
+                onMouseEnter={(e) => e.target.style.backgroundColor = '#DC2626'}
+                onMouseLeave={(e) => e.target.style.backgroundColor = '#EF4444'}
               >
-                <span style={{ fontSize: '20px', marginBottom: '2px' }}>📊</span>
-                <span style={{ fontSize: '12px' }}>Dashboard</span>
-              </button>
-              <button
-                onClick={() => handleNavigation('/settings')}
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  background: 'none',
-                  border: 'none',
-                  color: '#6B7280',
-                  cursor: 'pointer',
-                  padding: '8px 12px',
-                  borderRadius: '8px'
-                }}
-              >
-                <span style={{ fontSize: '20px', marginBottom: '2px' }}>⚙️</span>
-                <span style={{ fontSize: '12px' }}>Settings</span>
+                Stop Navigation
               </button>
             </div>
-          </nav>
+            
+            <div style={{ 
+              display: 'grid', 
+              gridTemplateColumns: '1fr 1fr', 
+              gap: '20px',
+              marginBottom: '24px'
+            }}>
+              <div style={{ 
+                backgroundColor: '#F9FAFB',
+                padding: '20px',
+                borderRadius: '12px',
+                border: '1px solid #E5E7EB'
+              }}>
+                <div style={{ 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  gap: '12px',
+                  marginBottom: '16px'
+                }}>
+                  <div style={{ 
+                    width: '48px',
+                    height: '48px',
+                    borderRadius: '50%',
+                    backgroundColor: '#3B82F6',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: 'white',
+                    fontSize: '24px'
+                  }}>
+                    {currentInstruction.icon}
+                  </div>
+                  <div>
+                    <h3 style={{ 
+                      margin: '0 0 4px 0', 
+                      fontSize: '18px',
+                      fontWeight: '600',
+                      color: '#1f2937'
+                    }}>
+                      {currentInstruction.text}
+                    </h3>
+                    <p style={{ 
+                      margin: 0, 
+                      fontSize: '14px',
+                      color: '#6b7280'
+                    }}>
+                      {currentInstruction.detail}
+                    </p>
+                  </div>
+                </div>
+                
+                <div style={{ 
+                  display: 'flex', 
+                  justifyContent: 'space-between',
+                  marginTop: '16px'
+                }}>
+                  <div>
+                    <div style={{ 
+                      fontSize: '12px',
+                      color: '#6b7280',
+                      marginBottom: '4px'
+                    }}>
+                      Next Signal
+                    </div>
+                    <div style={{ 
+                      fontSize: '16px',
+                      fontWeight: '600',
+                      color: '#1f2937'
+                    }}>
+                      {nextSignal ? nextSignal.intersection_name : 'None detected'}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ 
+                      fontSize: '12px',
+                      color: '#6b7280',
+                      marginBottom: '4px'
+                    }}>
+                      Status
+                    </div>
+                    <div style={{ 
+                      fontSize: '16px',
+                      fontWeight: '600',
+                      color: '#1f2937'
+                    }}>
+                      {nextSignal ? nextSignal.current_state.color : 'N/A'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              
+              <div style={{ 
+                backgroundColor: '#F9FAFB',
+                padding: '20px',
+                borderRadius: '12px',
+                border: '1px solid #E5E7EB'
+              }}>
+                <h3 style={{ 
+                  margin: '0 0 16px 0', 
+                  fontSize: '18px',
+                  fontWeight: '600',
+                  color: '#1f2937'
+                }}>
+                  Traffic Light Status
+                </h3>
+                
+                <div style={{ 
+                  display: 'flex', 
+                  flexDirection: 'column',
+                  gap: '12px'
+                }}>
+                  {trafficLights.slice(0, 3).map((light, index) => (
+                    <div 
+                      key={light.light_id}
+                      style={{ 
+                        display: 'flex', 
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        padding: '12px',
+                        backgroundColor: 'white',
+                        borderRadius: '8px',
+                        border: '1px solid #E5E7EB'
+                      }}
+                    >
+                      <div style={{ 
+                        fontSize: '14px',
+                        fontWeight: '500',
+                        color: '#1f2937'
+                      }}>
+                        {light.intersection_name}
+                      </div>
+                      <div style={{ 
+                        display: 'flex', 
+                        alignItems: 'center', 
+                        gap: '8px'
+                      }}>
+                        <div style={{ 
+                          width: '12px',
+                          height: '12px',
+                          borderRadius: '50%',
+                          backgroundColor: light.current_state.color === 'red' ? '#EF4444' : light.current_state.color === 'yellow' ? '#F59E0B' : '#10B981'
+                        }}>
+                        </div>
+                        <div style={{ 
+                          fontSize: '14px',
+                          fontWeight: '500',
+                          color: '#6b7280'
+                        }}>
+                          {light.current_state.time_remaining}s
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+            
+            <div id="navigation-map" style={{ height: '400px', borderRadius: '12px', overflow: 'hidden', border: '1px solid #E5E7EB' }}>
+              <MapComponent 
+                center={mapCenter}
+                trafficLights={trafficLights}
+                userPosition={userPosition || selectedFromCoords}
+                destination={selectedToCoords}
+              />
+            </div>
+            
+            {/* Eco-Score / Trip Health Report */}
+            {ecoScore && (
+              <div style={{ 
+                backgroundColor: '#F9FAFB',
+                padding: '20px',
+                borderRadius: '12px',
+                border: '1px solid #E5E7EB',
+                marginTop: '24px'
+              }}>
+                <h3 style={{ 
+                  margin: '0 0 16px 0', 
+                  fontSize: '18px',
+                  fontWeight: '600',
+                  color: '#1f2937'
+                }}>
+                  📊 Trip Health Report
+                </h3>
+                
+                <div style={{ 
+                  display: 'grid', 
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', 
+                  gap: '16px'
+                }}>
+                  <div style={{ 
+                    backgroundColor: 'white',
+                    padding: '16px',
+                    borderRadius: '8px',
+                    border: '1px solid #E5E7EB',
+                    textAlign: 'center'
+                  }}>
+                    <div style={{ 
+                      fontSize: '24px',
+                      fontWeight: '700',
+                      color: '#10B981',
+                      marginBottom: '8px'
+                    }}>
+                      {ecoScore.signalsOnGreen}
+                    </div>
+                    <div style={{ 
+                      fontSize: '14px',
+                      color: '#6b7280'
+                    }}>
+                      Signals on Green
+                    </div>
+                  </div>
+                  
+                  <div style={{ 
+                    backgroundColor: 'white',
+                    padding: '16px',
+                    borderRadius: '8px',
+                    border: '1px solid #E5E7EB',
+                    textAlign: 'center'
+                  }}>
+                    <div style={{ 
+                      fontSize: '24px',
+                      fontWeight: '700',
+                      color: '#EF4444',
+                      marginBottom: '8px'
+                    }}>
+                      {ecoScore.pollutionReduction}%
+                    </div>
+                    <div style={{ 
+                      fontSize: '14px',
+                      color: '#6b7280'
+                    }}>
+                      Pollution Reduction
+                    </div>
+                  </div>
+                  
+                  <div style={{ 
+                    backgroundColor: 'white',
+                    padding: '16px',
+                    borderRadius: '8px',
+                    border: '1px solid #E5E7EB',
+                    textAlign: 'center'
+                  }}>
+                    <div style={{ 
+                      fontSize: '24px',
+                      fontWeight: '700',
+                      color: '#3B82F6',
+                      marginBottom: '8px'
+                    }}>
+                      {ecoScore.fuelSaved}ml
+                    </div>
+                    <div style={{ 
+                      fontSize: '14px',
+                      color: '#6b7280'
+                    }}>
+                      Fuel Saved
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
         )}
       </main>
-
+      
+      <footer style={{ 
+        background: 'linear-gradient(135deg, #3B82F6 0%, #1D4ED8 100%)', 
+        color: 'white', 
+        padding: '20px 24px', 
+        boxShadow: '0 -4px 6px rgba(0,0,0,0.1)',
+        position: 'relative'
+      }}>
+        <div style={{ 
+          display: 'flex', 
+          justifyContent: 'space-between', 
+          alignItems: 'center',
+          maxWidth: '1400px',
+          margin: '0 auto'
+        }}>
+          <div>
+            <p style={{ 
+              margin: 0, 
+              fontSize: '14px', 
+              opacity: 0.9,
+              fontWeight: '400'
+            }}>
+              © 2023 SafeAir Navigator. All rights reserved.
+            </p>
+          </div>
+          
+          <div style={{ display: 'flex', gap: '12px' }}>
+            <button
+              onClick={() => handleNavigation('/about')}
+              style={{
+                backgroundColor: 'rgba(255,255,255,0.2)',
+                color: 'white',
+                border: '1px solid rgba(255,255,255,0.3)',
+                padding: '8px 16px',
+                borderRadius: '8px',
+                fontSize: '14px',
+                fontWeight: '500',
+                cursor: 'pointer',
+                backdropFilter: 'blur(10px)',
+                transition: 'background-color 0.3s ease'
+              }}
+              onMouseEnter={(e) => e.target.style.backgroundColor = 'rgba(255,255,255,0.3)'}
+              onMouseLeave={(e) => e.target.style.backgroundColor = 'rgba(255,255,255,0.2)'}
+            >
+              About
+            </button>
+            <button
+              onClick={() => handleNavigation('/contact')}
+              style={{
+                backgroundColor: 'rgba(255,255,255,0.2)',
+                color: 'white',
+                border: '1px solid rgba(255,255,255,0.3)',
+                padding: '8px 16px',
+                borderRadius: '8px',
+                fontSize: '14px',
+                fontWeight: '500',
+                cursor: 'pointer',
+                backdropFilter: 'blur(10px)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                transition: 'all 0.2s ease'
+              }}
+              onMouseEnter={(e) => e.target.style.backgroundColor = 'rgba(255,255,255,0.3)'}
+              onMouseLeave={(e) => e.target.style.backgroundColor = 'rgba(255,255,255,0.2)'}
+            >
+              <span>📍</span>
+              Current Location
+            </button>
+            
+            <button
+              onClick={() => handleNavigation('/dashboard')}
+              style={{
+                backgroundColor: 'rgba(255,255,255,0.2)',
+                color: 'white',
+                border: '1px solid rgba(255,255,255,0.3)',
+                padding: '8px 16px',
+                borderRadius: '8px',
+                fontSize: '14px',
+                fontWeight: '500',
+                cursor: 'pointer',
+                backdropFilter: 'blur(10px)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                transition: 'all 0.2s ease'
+              }}
+              onMouseEnter={(e) => e.target.style.backgroundColor = 'rgba(255,255,255,0.3)'}
+              onMouseLeave={(e) => e.target.style.backgroundColor = 'rgba(255,255,255,0.2)'}
+            >
+              <span>📊</span>
+              Dashboard
+            </button>
+          </div>
+        </div>
+      </footer>
     </div>
   );
 };
