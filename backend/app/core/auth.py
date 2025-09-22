@@ -84,3 +84,37 @@ class SessionAuth:
             )
         
         return user_session
+
+
+# Create a global instance
+session_auth = SessionAuth()
+
+
+def get_current_session(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    db: Session = Depends(get_db)
+) -> UserSessionResponse:
+    """
+    Dependency to get current session from request headers
+    """
+    return session_auth.require_session(request, credentials, db)
+
+
+def get_optional_session(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    db: Session = Depends(get_db)
+) -> Optional[UserSessionResponse]:
+    """
+    Dependency to get optional session from request headers
+    Does not raise an exception if no session is found
+    """
+    return session_auth.get_session_from_header(request, credentials, db)
+
+
+def get_session_service(db: Session = Depends(get_db)) -> SessionService:
+    """
+    Dependency to get session service instance
+    """
+    return SessionService(db)

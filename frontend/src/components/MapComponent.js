@@ -89,7 +89,7 @@ const MapComponent = ({
   return (
     <LoadScript 
       googleMapsApiKey={googleMapsApiKey} 
-      libraries={['places']}
+      libraries={['places', 'directions']} // Add directions library
       onError={(error) => console.error("Google Maps API load error:", error)}
       onLoad={() => console.log("Google Maps API loaded successfully")}
     >

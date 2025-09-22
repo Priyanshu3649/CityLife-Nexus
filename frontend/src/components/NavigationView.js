@@ -145,6 +145,42 @@ const NavigationView = () => {
     return () => clearInterval(interval);
   }, [isNavigating]);
 
+  const getDirectionIcon = (maneuver) => {
+    switch (maneuver) {
+      case 'turn-left':
+        return '⬅️';
+      case 'turn-right':
+        return '➡️';
+      case 'turn-slight-left':
+        return '↖️';
+      case 'turn-slight-right':
+        return '↗️';
+      case 'turn-sharp-left':
+        return '↩️';
+      case 'turn-sharp-right':
+        return '↪️';
+      case 'uturn-left':
+      case 'uturn-right':
+        return '↩️';
+      case 'ramp-left':
+      case 'ramp-right':
+        return '↗️';
+      case 'merge':
+        return '↘️';
+      case 'fork-left':
+      case 'fork-right':
+        return '⤵️';
+      case 'roundabout-left':
+      case 'roundabout-right':
+        return '🔄';
+      case 'keep-left':
+      case 'keep-right':
+        return '🛣️';
+      default:
+        return '↑'; // straight
+    }
+  };
+
   const handleNavigation = (path) => {
     navigate(path);
   };
@@ -535,6 +571,67 @@ const NavigationView = () => {
       
       await fetchTrafficLightData(selectedFromCoords, selectedToCoords);
       
+      // Fetch real turn-by-turn directions from Google Maps API
+      try {
+        if (typeof window.google !== 'undefined' && window.google.maps && window.google.maps.DirectionsService) {
+          const directionsService = new window.google.maps.DirectionsService();
+          
+          directionsService.route(
+            {
+              origin: { lat: selectedFromCoords.lat, lng: selectedFromCoords.lng },
+              destination: { lat: selectedToCoords.lat, lng: selectedToCoords.lng },
+              travelMode: window.google.maps.TravelMode.DRIVING
+            },
+            (response, status) => {
+              if (status === 'OK' && response.routes && response.routes.length > 0) {
+                // Store the directions for use in navigation
+                const directions = response.routes[0];
+                // Set the first instruction as the current instruction
+                if (directions.legs && directions.legs.length > 0 && directions.legs[0].steps && directions.legs[0].steps.length > 0) {
+                  const firstStep = directions.legs[0].steps[0];
+                  const newInstruction = {
+                    icon: getDirectionIcon(firstStep.maneuver),
+                    text: firstStep.instructions.replace(/<[^>]*>/g, ''), // Remove HTML tags
+                    detail: `for ${firstStep.distance.text}`
+                  };
+                  setCurrentInstruction(newInstruction);
+                  speakNavigationInstruction(newInstruction);
+                }
+              } else {
+                console.error('Directions request failed due to ' + status);
+                // Fallback to default instruction
+                const fallbackInstruction = {
+                  icon: '↑',
+                  text: 'Continue straight',
+                  detail: 'for 200 meters'
+                };
+                setCurrentInstruction(fallbackInstruction);
+                speakNavigationInstruction(fallbackInstruction);
+              }
+            }
+          );
+        } else {
+          // Fallback to default instruction if Google Maps is not available
+          const fallbackInstruction = {
+            icon: '↑',
+            text: 'Continue straight',
+            detail: 'for 200 meters'
+          };
+          setCurrentInstruction(fallbackInstruction);
+          speakNavigationInstruction(fallbackInstruction);
+        }
+      } catch (error) {
+        console.error('Error fetching directions:', error);
+        // Fallback to default instruction
+        const fallbackInstruction = {
+          icon: '↑',
+          text: 'Continue straight',
+          detail: 'for 200 meters'
+        };
+        setCurrentInstruction(fallbackInstruction);
+        speakNavigationInstruction(fallbackInstruction);
+      }
+      
       setTimeout(() => {
         const mapElement = document.getElementById('navigation-map');
         if (mapElement) {
@@ -667,6 +764,60 @@ const NavigationView = () => {
   useEffect(() => {
     if (!isNavigating || !selectedFromCoords || !selectedToCoords) return;
     
+    // Store directions and current step
+    let directions = null;
+    let currentStepIndex = 0;
+    let steps = [];
+    
+    // Fetch real directions when navigation starts
+    const fetchDirections = () => {
+      if (typeof window.google !== 'undefined' && window.google.maps && window.google.maps.DirectionsService) {
+        const directionsService = new window.google.maps.DirectionsService();
+        
+        directionsService.route(
+          {
+            origin: { lat: selectedFromCoords.lat, lng: selectedFromCoords.lng },
+            destination: { lat: selectedToCoords.lat, lng: selectedToCoords.lng },
+            travelMode: window.google.maps.TravelMode.DRIVING
+          },
+          (response, status) => {
+            if (status === 'OK' && response.routes && response.routes.length > 0) {
+              directions = response.routes[0];
+              // Extract steps from all legs
+              steps = [];
+              directions.legs.forEach(leg => {
+                steps = steps.concat(leg.steps);
+              });
+              
+              // Set the first instruction as the current instruction
+              if (steps.length > 0) {
+                const firstStep = steps[0];
+                const newInstruction = {
+                  icon: getDirectionIcon(firstStep.maneuver),
+                  text: firstStep.instructions.replace(/<[^>]*>/g, ''), // Remove HTML tags
+                  detail: `for ${firstStep.distance.text}`
+                };
+                setCurrentInstruction(newInstruction);
+                speakNavigationInstruction(newInstruction);
+              }
+            } else {
+              console.error('Directions request failed due to ' + status);
+              // Fallback to default instruction
+              const fallbackInstruction = {
+                icon: '↑',
+                text: 'Continue straight',
+                detail: 'for 200 meters'
+              };
+              setCurrentInstruction(fallbackInstruction);
+              speakNavigationInstruction(fallbackInstruction);
+            }
+          }
+        );
+      }
+    };
+    
+    fetchDirections();
+    
     const startPosition = { lat: selectedFromCoords.lat, lng: selectedFromCoords.lng };
     const endPosition = { lat: selectedToCoords.lat, lng: selectedToCoords.lng };
     
@@ -680,8 +831,26 @@ const NavigationView = () => {
         };
         setUserPosition(currentPosition);
         
+        // For demo purposes, we'll still use simulated instructions
+        // In a real app, this would be based on actual route progress and steps
         let newInstruction;
-        if (progress < 0.2) {
+        if (steps.length > 0 && progress > 0.2 && progress < 0.25) {
+          // Simulate reaching the first turn
+          if (steps.length > 1) {
+            const secondStep = steps[1];
+            newInstruction = {
+              icon: getDirectionIcon(secondStep.maneuver),
+              text: secondStep.instructions.replace(/<[^>]*>/g, ''),
+              detail: `in ${secondStep.distance.text}`
+            };
+          } else {
+            newInstruction = {
+              icon: '↑',
+              text: 'Continue straight',
+              detail: 'for 200 meters'
+            };
+          }
+        } else if (progress < 0.2) {
           newInstruction = {
             icon: '↑',
             text: 'Continue straight',
@@ -690,8 +859,8 @@ const NavigationView = () => {
         } else if (progress < 0.4) {
           newInstruction = {
             icon: '➡️',
-            text: 'Turn left',
-            detail: 'at next intersection'
+            text: 'Turn right onto Main Street',
+            detail: 'in 100 meters'
           };
         } else if (progress < 0.7) {
           newInstruction = {
@@ -701,9 +870,9 @@ const NavigationView = () => {
           };
         } else if (progress < 0.9) {
           newInstruction = {
-            icon: '⬇️',
-            text: 'Turn right',
-            detail: 'to stay on route'
+            icon: '⬅️',
+            text: 'Turn left to stay on route',
+            detail: 'in 200 meters'
           };
         } else {
           newInstruction = {
@@ -718,10 +887,10 @@ const NavigationView = () => {
           speakAlert(`Trip completed! ${finalEcoScore.signalsOnGreen} signals caught green, ${finalEcoScore.pollutionReduction}% lower pollution exposure, ${finalEcoScore.fuelSaved}ml fuel saved.`);
         }
         
-        if (newInstruction.text !== currentInstruction.text) {
+        if (newInstruction && newInstruction.text !== currentInstruction.text) {
           setCurrentInstruction(newInstruction);
           speakNavigationInstruction(newInstruction);
-        } else {
+        } else if (newInstruction) {
           setCurrentInstruction(newInstruction);
         }
       } else {
@@ -1645,6 +1814,9 @@ const NavigationView = () => {
                 trafficLights={trafficLights}
                 userPosition={userPosition || selectedFromCoords}
                 destination={selectedToCoords}
+                fromCoords={selectedFromCoords}
+                toCoords={selectedToCoords}
+                isNavigating={isNavigating}
               />
             </div>
             

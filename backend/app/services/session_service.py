@@ -17,6 +17,11 @@ from app.schemas.user import (
 )
 
 
+def generate_session_id() -> str:
+    """Generate a unique session ID"""
+    return str(uuid4())
+
+
 class SessionService:
     """Service for managing user sessions and preferences"""
     
