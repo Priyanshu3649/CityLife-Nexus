@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>App Context Speech Test</title>
+</head>
+<body>
+    <h1>App Context Speech Test</h1>
+    <button id="testEnglish">Test English Speech</button>
+    <button id="testHindi">Test Hindi Speech</button>
+    <button id="testLocalStorage">Test with localStorage Voice</button>
+    <div id="output"></div>
+    
+    <script>
+        document.getElementById('testEnglish').addEventListener('click', function() {
+            if ('speechSynthesis' in window) {
+                const speech = new SpeechSynthesisUtterance('Hello, this is a test of English text-to-speech.');
+                speech.lang = 'en-US';
+                speech.volume = 1;
+                speech.rate = 1;
+                speech.pitch = 1;
+                
+                speech.onstart = function(event) {
+                    console.log('English speech started');
+                    document.getElementById('output').innerHTML += '<p>English speech started</p>';
+                };
+                
+                speech.onend = function(event) {
+                    console.log('English speech ended');
+                    document.getElementById('output').innerHTML += '<p>English speech ended</p>';
+                };
+                
+                speech.onerror = function(event) {
+                    console.error('English speech error:', event.error);
+                    document.getElementById('output').innerHTML += '<p style="color: red;">English speech error: ' + event.error + '</p>';
+                };
+                
+                window.speechSynthesis.speak(speech);
+                document.getElementById('output').innerHTML += '<p>Speaking English test...</p>';
+            } else {
+                document.getElementById('output').innerHTML += '<p style="color: red;">Speech synthesis not supported</p>';
+            }
+        });
+        
+        document.getElementById('testHindi').addEventListener('click', function() {
+            if ('speechSynthesis' in window) {
+                const speech = new SpeechSynthesisUtterance('नमस्ते, यह पाठ-से-भाषण कार्यक्षमता का एक परीक्षण है।');
+                speech.lang = 'hi-IN';
+                speech.volume = 1;
+                speech.rate = 1;
+                speech.pitch = 1;
+                
+                speech.onstart = function(event) {
+                    console.log('Hindi speech started');
+                    document.getElementById('output').innerHTML += '<p>Hindi speech started</p>';
+                };
+                
+                speech.onend = function(event) {
+                    console.log('Hindi speech ended');
+                    document.getElementById('output').innerHTML += '<p>Hindi speech ended</p>';
+                };
+                
+                speech.onerror = function(event) {
+                    console.error('Hindi speech error:', event.error);
+                    document.getElementById('output').innerHTML += '<p style="color: red;">Hindi speech error: ' + event.error + '</p>';
+                };
+                
+                window.speechSynthesis.speak(speech);
+                document.getElementById('output').innerHTML += '<p>Speaking Hindi test...</p>';
+            } else {
+                document.getElementById('output').innerHTML += '<p style="color: red;">Speech synthesis not supported</p>';
+            }
+        });
+        
+        document.getElementById('testLocalStorage').addEventListener('click', function() {
+            if ('speechSynthesis' in window) {
+                // Get voice from localStorage like the app does
+                const savedVoiceName = localStorage.getItem('selectedVoice');
+                document.getElementById('output').innerHTML += '<p>Saved voice from localStorage: ' + savedVoiceName + '</p>';
+                
+                if (savedVoiceName) {
+                    const text = 'This is a test using your saved voice preference.';
+                    const speech = new SpeechSynthesisUtterance(text);
+                    
+                    // Determine language like the app does
+                    let lang = 'en-US';
+                    if (savedVoiceName.includes('Hindi') || savedVoiceName.includes('hi') || savedVoiceName.includes('हिन्दी')) {
+                        lang = 'hi-IN';
+                    }
+                    speech.lang = lang;
+                    speech.volume = 1;
+                    speech.rate = 1;
+                    speech.pitch = 1;
+                    
+                    const voices = window.speechSynthesis.getVoices();
+                    const selectedVoice = voices.find(voice => voice.name === savedVoiceName);
+                    if (selectedVoice) {
+                        speech.voice = selectedVoice;
+                        document.getElementById('output').innerHTML += '<p>Using voice: ' + selectedVoice.name + '</p>';
+                    } else {
+                        document.getElementById('output').innerHTML += '<p style="color: orange;">Voice not found, using default</p>';
+                    }
+                    
+                    speech.onstart = function(event) {
+                        console.log('LocalStorage speech started');
+                        document.getElementById('output').innerHTML += '<p>Speech started with saved voice</p>';
+                    };
+                    
+                    speech.onend = function(event) {
+                        console.log('LocalStorage speech ended');
+                        document.getElementById('output').innerHTML += '<p>Speech ended with saved voice</p>';
+                    };
+                    
+                    speech.onerror = function(event) {
+                        console.error('LocalStorage speech error:', event.error);
+                        document.getElementById('output').innerHTML += '<p style="color: red;">Speech error with saved voice: ' + event.error + '</p>';
+                    };
+                    
+                    window.speechSynthesis.speak(speech);
+                    document.getElementById('output').innerHTML += '<p>Speaking with saved voice...</p>';
+                } else {
+                    document.getElementById('output').innerHTML += '<p style="color: orange;">No saved voice in localStorage</p>';
+                }
+            } else {
+                document.getElementById('output').innerHTML += '<p style="color: red;">Speech synthesis not supported</p>';
+            }
+        });
+    </script>
+</body>
+</html>

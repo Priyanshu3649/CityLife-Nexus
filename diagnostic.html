@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Speech Synthesis Diagnostic</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .test-area { margin: 20px 0; padding: 15px; border: 1px solid #ccc; border-radius: 5px; }
+        button { padding: 10px 15px; margin: 5px; cursor: pointer; }
+        .result { margin: 10px 0; padding: 10px; background-color: #f0f0f0; border-radius: 3px; }
+    </style>
+</head>
+<body>
+    <h1>Speech Synthesis Diagnostic Tool</h1>
+    
+    <div class="test-area">
+        <h2>Browser Support Check</h2>
+        <button id="checkSupport">Check Speech Synthesis Support</button>
+        <div id="supportResult" class="result"></div>
+    </div>
+    
+    <div class="test-area">
+        <h2>Available Voices</h2>
+        <button id="loadVoices">Load Available Voices</button>
+        <div id="voicesResult" class="result"></div>
+    </div>
+    
+    <div class="test-area">
+        <h2>Speech Test</h2>
+        <input type="text" id="textInput" value="Hello, this is a test of the text-to-speech functionality." style="width: 100%; padding: 8px; margin: 10px 0;">
+        <select id="voiceSelect" style="width: 100%; padding: 8px; margin: 10px 0;"></select>
+        <button id="speakTest">Speak Test Text</button>
+        <button id="stopSpeech">Stop Speech</button>
+        <div id="speechResult" class="result"></div>
+    </div>
+
+    <script>
+        document.getElementById('checkSupport').addEventListener('click', function() {
+            const result = document.getElementById('supportResult');
+            if ('speechSynthesis' in window) {
+                result.innerHTML = '<p style="color: green;">✅ Speech Synthesis is supported in this browser</p>';
+            } else {
+                result.innerHTML = '<p style="color: red;">❌ Speech Synthesis is NOT supported in this browser</p>';
+            }
+        });
+        
+        document.getElementById('loadVoices').addEventListener('click', function() {
+            const result = document.getElementById('voicesResult');
+            if (!('speechSynthesis' in window)) {
+                result.innerHTML = '<p style="color: red;">Speech Synthesis not supported</p>';
+                return;
+            }
+            
+            const voices = speechSynthesis.getVoices();
+            if (voices.length === 0) {
+                result.innerHTML = '<p>No voices available. Try clicking again after a moment.</p>';
+                // Try again in a moment
+                setTimeout(() => {
+                    const voices = speechSynthesis.getVoices();
+                    displayVoices(voices, result);
+                }, 500);
+                return;
+            }
+            
+            displayVoices(voices, result);
+            populateVoiceSelect(voices);
+        });
+        
+        function displayVoices(voices, resultElement) {
+            if (voices.length === 0) {
+                resultElement.innerHTML = '<p>No voices available</p>';
+                return;
+            }
+            
+            let html = `<p>Found ${voices.length} voices:</p><ul>`;
+            voices.forEach((voice, index) => {
+                html += `<li><strong>${voice.name}</strong> (${voice.lang}) ${voice.default ? '[DEFAULT]' : ''} ${voice.localService ? '[LOCAL]' : '[REMOTE]'}</li>`;
+            });
+            html += '</ul>';
+            
+            resultElement.innerHTML = html;
+        }
+        
+        function populateVoiceSelect(voices) {
+            const select = document.getElementById('voiceSelect');
+            select.innerHTML = '';
+            
+            voices.forEach((voice, index) => {
+                const option = document.createElement('option');
+                option.value = voice.name;
+                option.textContent = `${voice.name} (${voice.lang})`;
+                select.appendChild(option);
+            });
+        }
+        
+        document.getElementById('speakTest').addEventListener('click', function() {
+            const result = document.getElementById('speechResult');
+            if (!('speechSynthesis' in window)) {
+                result.innerHTML = '<p style="color: red;">Speech Synthesis not supported</p>';
+                return;
+            }
+            
+            const text = document.getElementById('textInput').value;
+            const selectedVoiceName = document.getElementById('voiceSelect').value;
+            
+            if (!text) {
+                result.innerHTML = '<p style="color: orange;">Please enter some text to speak</p>';
+                return;
+            }
+            
+            const speech = new SpeechSynthesisUtterance(text);
+            speech.lang = 'en-US';
+            speech.volume = 1;
+            speech.rate = 1;
+            speech.pitch = 1;
+            
+            // Try to set the selected voice
+            if (selectedVoiceName) {
+                const voices = speechSynthesis.getVoices();
+                const selectedVoice = voices.find(voice => voice.name === selectedVoiceName);
+                if (selectedVoice) {
+                    speech.voice = selectedVoice;
+                    result.innerHTML = `<p>Speaking with voice: ${selectedVoice.name}</p>`;
+                } else {
+                    result.innerHTML = '<p>Could not find selected voice, using default</p>';
+                }
+            } else {
+                result.innerHTML = '<p>Speaking with default voice</p>';
+            }
+            
+            speechSynthesis.speak(speech);
+        });
+        
+        document.getElementById('stopSpeech').addEventListener('click', function() {
+            if ('speechSynthesis' in window) {
+                speechSynthesis.cancel();
+                document.getElementById('speechResult').innerHTML = '<p>Speech stopped</p>';
+            }
+        });
+        
+        // Load voices when they become available
+        if ('speechSynthesis' in window) {
+            speechSynthesis.onvoiceschanged = function() {
+                console.log('Voices loaded');
+                const voices = speechSynthesis.getVoices();
+                populateVoiceSelect(voices);
+            };
+        }
+    </script>
+</body>
+</html>

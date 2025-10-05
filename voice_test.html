@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Voice Test</title>
+</head>
+<body>
+    <h1>Available Voices</h1>
+    <button id="loadVoices">Load Voices</button>
+    <div id="voiceList"></div>
+
+    <script>
+        document.getElementById('loadVoices').addEventListener('click', function() {
+            const voices = speechSynthesis.getVoices();
+            const voiceList = document.getElementById('voiceList');
+            
+            if (voices.length === 0) {
+                voiceList.innerHTML = '<p>No voices available</p>';
+                return;
+            }
+            
+            let html = '<ul>';
+            voices.forEach(voice => {
+                html += `<li>${voice.name} (${voice.lang}) - ${voice.default ? 'Default' : ''}</li>`;
+            });
+            html += '</ul>';
+            
+            voiceList.innerHTML = html;
+        });
+        
+        // Load voices when they become available
+        speechSynthesis.onvoiceschanged = function() {
+            console.log('Voices loaded');
+        };
+    </script>
+</body>
+</html>

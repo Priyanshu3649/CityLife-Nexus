@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Speech Test</title>
+</head>
+<body>
+    <h1>Speech Synthesis Test</h1>
+    <button id="testSpeech">Test Speech</button>
+    <button id="testHindiSpeech">Test Hindi Speech</button>
+    <script>
+        document.getElementById('testSpeech').addEventListener('click', function() {
+            if ('speechSynthesis' in window) {
+                const speech = new SpeechSynthesisUtterance('Hello, this is a test of the text-to-speech functionality.');
+                speech.lang = 'en-US';
+                speech.volume = 1;
+                speech.rate = 1;
+                speech.pitch = 1;
+                window.speechSynthesis.speak(speech);
+                console.log('Speaking English text');
+            } else {
+                console.log('Speech synthesis not supported');
+            }
+        });
+        
+        document.getElementById('testHindiSpeech').addEventListener('click', function() {
+            if ('speechSynthesis' in window) {
+                const speech = new SpeechSynthesisUtterance('नमस्ते, यह पाठ-से-भाषण कार्यक्षमता का एक परीक्षण है।');
+                speech.lang = 'hi-IN';
+                speech.volume = 1;
+                speech.rate = 1;
+                speech.pitch = 1;
+                window.speechSynthesis.speak(speech);
+                console.log('Speaking Hindi text');
+            } else {
+                console.log('Speech synthesis not supported');
+            }
+        });
+    </script>
+</body>
+</html>

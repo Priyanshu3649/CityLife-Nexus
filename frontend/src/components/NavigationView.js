@@ -187,6 +187,7 @@ const NavigationView = () => {
 
   // Fetch traffic light data for the route
   const fetchTrafficLightData = async (fromCoords, toCoords) => {
+    console.log('Fetching traffic light data', { fromCoords, toCoords });
     try {
       const routeCoordinates = [
         { latitude: fromCoords.lat, longitude: fromCoords.lng },
@@ -200,9 +201,12 @@ const NavigationView = () => {
         },
         body: JSON.stringify(routeCoordinates)
       });
+              
+      console.log('Traffic light API response status:', response.status);
       
       if (response.ok) {
         const signals = await response.json();
+        console.log('Traffic light data received:', signals);
         const trafficLightsData = signals.map(signal => ({
           light_id: signal.signal_id,
           coordinates: { 
@@ -215,6 +219,7 @@ const NavigationView = () => {
           },
           intersection_name: signal.intersection_name || signal.signal_id
         }));
+        console.log('Setting traffic lights data:', trafficLightsData);
         setTrafficLights(trafficLightsData);
       } else {
         const mockTrafficLights = [
@@ -662,15 +667,67 @@ const NavigationView = () => {
   };
 
   const speakAlert = (text) => {
-    if (!voiceNavigation) return;
+    console.log('speakAlert called with:', text);
+    if (!voiceNavigation) {
+      console.log('Voice navigation is disabled');
+      return;
+    }
     
     if ('speechSynthesis' in window) {
+      // Get selected voice from localStorage
+      const savedVoiceName = localStorage.getItem('selectedVoice');
+      
+      // Determine language based on selected voice or text content
+      let lang = 'en-US';
+      if (savedVoiceName) {
+        // Check if the selected voice is for Hindi
+        if (savedVoiceName.includes('Hindi') || savedVoiceName.includes('hi') || savedVoiceName.includes('हिन्दी')) {
+          lang = 'hi-IN';
+          console.log('Using Hindi language for voice:', savedVoiceName);
+        } else {
+          console.log('Using English language for voice:', savedVoiceName);
+        }
+      } else if (text.includes('नेविगेशन') || text.includes('हरियाणा') || text.includes('उत्तर प्रदेश')) {
+        // Fallback detection based on Hindi text content
+        lang = 'hi-IN';
+        console.log('Detected Hindi content, using hi-IN language');
+      }
+      
       const speech = new SpeechSynthesisUtterance(text);
-      speech.lang = 'en-US';
+      speech.lang = lang;
       speech.volume = 1;
       speech.rate = 1;
       speech.pitch = 1;
+      
+      console.log('Attempting to speak:', text, 'with language:', lang);
+      
+      if (savedVoiceName) {
+        const voices = window.speechSynthesis.getVoices();
+        console.log('Available voices:', voices.map(v => v.name + ' (' + v.lang + ')'));
+        const selectedVoice = voices.find(voice => voice.name === savedVoiceName);
+        if (selectedVoice) {
+          speech.voice = selectedVoice;
+          console.log('Using selected voice:', selectedVoice.name, selectedVoice.lang);
+        } else {
+          console.log('Selected voice not found:', savedVoiceName);
+        }
+      }
+      
+      // Add event listeners for debugging
+      speech.onstart = function(event) {
+        console.log('Speech started');
+      };
+      
+      speech.onend = function(event) {
+        console.log('Speech ended');
+      };
+      
+      speech.onerror = function(event) {
+        console.error('Speech error:', event.error);
+      };
+      
       window.speechSynthesis.speak(speech);
+      console.log('Speech synthesis command sent');
     } else {
       console.log('Text-to-speech not supported in this browser');
     }
@@ -682,7 +739,14 @@ const NavigationView = () => {
 
   // Monitor traffic lights and provide advisories during navigation
   useEffect(() => {
-    if (!isNavigating || trafficLights.length === 0 || !selectedFromCoords) return;
+    console.log('Traffic light advisory system triggered', { isNavigating, trafficLightsLength: trafficLights.length, selectedFromCoords });
+    if (!isNavigating || trafficLights.length === 0 || !selectedFromCoords) {
+      console.log('Traffic light advisory system skipped', { isNavigating, trafficLightsLength: trafficLights.length, selectedFromCoords });
+      return;
+    }
+    
+    // Keep track of announced signals to prevent repetition
+    const announcedSignals = new Set();
     
     const advisoryTimer = setInterval(() => {
       const lightsInRange = trafficLights
@@ -721,38 +785,48 @@ const NavigationView = () => {
         const recommendedSpeed = calculateRecommendedSpeed(distanceMeters, timeRemaining, color);
         const mlAdvisory = getMLBasedAdvisory(light, distanceMeters);
         
+        // Create a unique identifier for this signal state
+        const signalStateId = `${lightId}-${color}-${timeRemaining}`;
+        
         let advisoryText = '';
         if (color === 'red') {
           if (timeRemaining <= 15 && timeRemaining > 0) {
             if (recommendedSpeed) {
-              advisoryText = `${lightId} ${Math.round(distanceMeters)}m ahead changes to green in ${timeRemaining}s. Slow down to ${recommendedSpeed} km/h to avoid waiting. ${mlAdvisory.message}`;
+              advisoryText = `Red signal ${Math.round(distanceMeters)}m ahead turning green in ${timeRemaining}s, slow down to ${recommendedSpeed} km/h to avoid waiting and save fuel.`;
             } else {
-              advisoryText = `${lightId} ${Math.round(distanceMeters)}m ahead changes to green in ${timeRemaining}s. Slow down to avoid waiting. ${mlAdvisory.message}`;
+              advisoryText = `Red signal ${Math.round(distanceMeters)}m ahead turning green in ${timeRemaining}s, slow down to avoid waiting and save fuel.`;
             }
           } else if (timeRemaining === 0) {
-            advisoryText = `${lightId} ${Math.round(distanceMeters)}m ahead turning green now. Proceed carefully.`;
+            advisoryText = `Red signal ${Math.round(distanceMeters)}m ahead turning green now. Proceed carefully.`;
           }
         } else if (color === 'green') {
           if (timeRemaining <= 15 && timeRemaining > 0) {
             if (recommendedSpeed) {
-              advisoryText = `${lightId} ${Math.round(distanceMeters)}m ahead turning yellow in ${timeRemaining}s. Maintain speed at ${recommendedSpeed} km/h. ${mlAdvisory.message}`;
+              advisoryText = `Green signal ${Math.round(distanceMeters)}m ahead turning yellow in ${timeRemaining}s. Maintain speed at ${recommendedSpeed} km/h to save fuel.`;
             } else {
-              advisoryText = `${lightId} ${Math.round(distanceMeters)}m ahead turning yellow in ${timeRemaining}s. Maintain speed. ${mlAdvisory.message}`;
+              advisoryText = `Green signal ${Math.round(distanceMeters)}m ahead turning yellow in ${timeRemaining}s. Maintain speed to save fuel.`;
             }
           } else if (timeRemaining === 0) {
-            advisoryText = `${lightId} ${Math.round(distanceMeters)}m ahead turning yellow now. Prepare to stop. ${mlAdvisory.message}`;
+            advisoryText = `Green signal ${Math.round(distanceMeters)}m ahead turning yellow now. Prepare to stop.`;
           }
         } else if (color === 'yellow') {
           if (timeRemaining > 0) {
-            advisoryText = `${lightId} ${Math.round(distanceMeters)}m ahead turning red in ${timeRemaining}s. Prepare to stop. ${mlAdvisory.message}`;
+            advisoryText = `Yellow signal ${Math.round(distanceMeters)}m ahead turning red in ${timeRemaining}s. Prepare to stop to save fuel.`;
           } else {
-            advisoryText = `${lightId} ${Math.round(distanceMeters)}m ahead turned red. Stop if safe to do so. ${mlAdvisory.message}`;
+            advisoryText = `Yellow signal ${Math.round(distanceMeters)}m ahead turned red. Stop if safe to do so to save fuel.`;
           }
         }
         
-        if (advisoryText) {
+        // Only announce if we haven't announced this exact signal state recently
+        if (advisoryText && !announcedSignals.has(signalStateId)) {
           console.log(`Traffic Advisory ${index + 1}:`, advisoryText);
           speakAlert(advisoryText);
+          announcedSignals.add(signalStateId);
+          
+          // Remove this signal state from the set after 10 seconds to allow re-announcement
+          setTimeout(() => {
+            announcedSignals.delete(signalStateId);
+          }, 10000);
         }
       });
     }, 5000);
@@ -1739,6 +1813,24 @@ const NavigationView = () => {
                       {nextSignal ? nextSignal.current_state.color : 'N/A'}
                     </div>
                   </div>
+                  {nextSignal && (
+                    <div>
+                      <div style={{ 
+                        fontSize: '12px',
+                        color: '#6b7280',
+                        marginBottom: '4px'
+                      }}>
+                        Distance
+                      </div>
+                      <div style={{ 
+                        fontSize: '16px',
+                        fontWeight: '600',
+                        color: '#1f2937'
+                      }}>
+                        {Math.round(nextSignal.distanceMeters || 0)}m
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
               
@@ -1762,48 +1854,63 @@ const NavigationView = () => {
                   flexDirection: 'column',
                   gap: '12px'
                 }}>
-                  {trafficLights.slice(0, 3).map((light, index) => (
-                    <div 
-                      key={light.light_id}
-                      style={{ 
-                        display: 'flex', 
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        padding: '12px',
-                        backgroundColor: 'white',
-                        borderRadius: '8px',
-                        border: '1px solid #E5E7EB'
-                      }}
-                    >
-                      <div style={{ 
-                        fontSize: '14px',
-                        fontWeight: '500',
-                        color: '#1f2937'
-                      }}>
-                        {light.intersection_name}
-                      </div>
-                      <div style={{ 
-                        display: 'flex', 
-                        alignItems: 'center', 
-                        gap: '8px'
-                      }}>
-                        <div style={{ 
-                          width: '12px',
-                          height: '12px',
-                          borderRadius: '50%',
-                          backgroundColor: light.current_state.color === 'red' ? '#EF4444' : light.current_state.color === 'yellow' ? '#F59E0B' : '#10B981'
-                        }}>
-                        </div>
+                  {trafficLights.slice(0, 3).map((light, index) => {
+                    // Calculate distance for display
+                    const referencePosition = userPosition || selectedFromCoords;
+                    const distance = referencePosition ? calculateDistance(referencePosition, light.coordinates) * 1000 : 0;
+                    
+                    return (
+                      <div 
+                        key={light.light_id}
+                        style={{ 
+                          display: 'flex', 
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          padding: '12px',
+                          backgroundColor: 'white',
+                          borderRadius: '8px',
+                          border: '1px solid #E5E7EB'
+                        }}
+                      >
                         <div style={{ 
                           fontSize: '14px',
                           fontWeight: '500',
-                          color: '#6b7280'
+                          color: '#1f2937'
                         }}>
-                          {light.current_state.time_remaining}s
+                          {light.intersection_name}
+                        </div>
+                        <div style={{ 
+                          display: 'flex', 
+                          alignItems: 'center', 
+                          gap: '8px'
+                        }}>
+                          <div style={{ 
+                            width: '12px',
+                            height: '12px',
+                            borderRadius: '50%',
+                            backgroundColor: light.current_state.color === 'red' ? '#EF4444' : light.current_state.color === 'yellow' ? '#F59E0B' : '#10B981'
+                          }}>
+                          </div>
+                          <div style={{ 
+                            fontSize: '14px',
+                            fontWeight: '500',
+                            color: '#6b7280',
+                            minWidth: '60px'
+                          }}>
+                            {light.current_state.time_remaining}s
+                          </div>
+                          <div style={{ 
+                            fontSize: '14px',
+                            fontWeight: '500',
+                            color: '#6b7280',
+                            minWidth: '50px'
+                          }}>
+                            {Math.round(distance)}m
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             </div>
@@ -1939,53 +2046,12 @@ const NavigationView = () => {
               opacity: 0.9,
               fontWeight: '400'
             }}>
-              © 2023 CityLife Nexus. All rights reserved.
+              © 2025 CityLife Nexus. All rights reserved.
             </p>
           </div>
           
           <div style={{ display: 'flex', gap: '12px' }}>
-            <button
-              onClick={() => handleNavigation('/about')}
-              style={{
-                backgroundColor: 'rgba(255,255,255,0.2)',
-                color: 'white',
-                border: '1px solid rgba(255,255,255,0.3)',
-                padding: '8px 16px',
-                borderRadius: '8px',
-                fontSize: '14px',
-                fontWeight: '500',
-                cursor: 'pointer',
-                backdropFilter: 'blur(10px)',
-                transition: 'background-color 0.3s ease'
-              }}
-              onMouseEnter={(e) => e.target.style.backgroundColor = 'rgba(255,255,255,0.3)'}
-              onMouseLeave={(e) => e.target.style.backgroundColor = 'rgba(255,255,255,0.2)'}
-            >
-              About
-            </button>
-            <button
-              onClick={() => handleNavigation('/contact')}
-              style={{
-                backgroundColor: 'rgba(255,255,255,0.2)',
-                color: 'white',
-                border: '1px solid rgba(255,255,255,0.3)',
-                padding: '8px 16px',
-                borderRadius: '8px',
-                fontSize: '14px',
-                fontWeight: '500',
-                cursor: 'pointer',
-                backdropFilter: 'blur(10px)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-                transition: 'all 0.2s ease'
-              }}
-              onMouseEnter={(e) => e.target.style.backgroundColor = 'rgba(255,255,255,0.3)'}
-              onMouseLeave={(e) => e.target.style.backgroundColor = 'rgba(255,255,255,0.2)'}
-            >
-              <span>📍</span>
-              Current Location
-            </button>
+            
             
             <button
               onClick={() => handleNavigation('/dashboard')}

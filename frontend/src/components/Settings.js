@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 const Settings = () => {
@@ -9,8 +9,74 @@ const Settings = () => {
   const [pollutionSensitivity, setPollutionSensitivity] = useState('normal');
   const [notifications, setNotifications] = useState(true);
   const [darkMode, setDarkMode] = useState(false);
+  const [availableVoices, setAvailableVoices] = useState([]);
+  const [selectedVoice, setSelectedVoice] = useState(null);
+  const [voicesLoaded, setVoicesLoaded] = useState(false);
+
+  // Load available voices when component mounts
+  useEffect(() => {
+    const loadVoices = () => {
+      if ('speechSynthesis' in window) {
+        const voices = window.speechSynthesis.getVoices();
+        console.log('Loading voices. Found:', voices.length, 'voices');
+        console.log('Voice details:', voices.map(v => ({ name: v.name, lang: v.lang, default: v.default })));
+        setAvailableVoices(voices);
+        setVoicesLoaded(true);
+        
+        // Set default voice (preferably a high-quality English voice)
+        const savedVoice = localStorage.getItem('selectedVoice');
+        console.log('Saved voice in localStorage:', savedVoice);
+        if (savedVoice) {
+          const savedVoiceObj = voices.find(voice => voice.name === savedVoice);
+          if (savedVoiceObj) {
+            console.log('Found saved voice:', savedVoiceObj.name);
+            setSelectedVoice(savedVoiceObj.name);
+            return;
+          } else {
+            console.log('Saved voice not found in available voices');
+          }
+        }
+        
+        // Set default voice (preferably a high-quality English voice)
+        const defaultVoice = voices.find(voice => 
+          voice.lang.includes('en') && (voice.name.includes('Google') || voice.name.includes('Microsoft') || voice.default)
+        ) || voices.find(voice => voice.default) || voices[0];
+        
+        if (defaultVoice) {
+          console.log('Setting default voice:', defaultVoice.name);
+          setSelectedVoice(defaultVoice.name);
+        }
+      } else {
+        console.log('Speech synthesis not supported in this browser');
+      }
+    };
+    
+    // Load voices immediately if they're already available
+    console.log('Checking if voices are already available...');
+    if (window.speechSynthesis && window.speechSynthesis.getVoices().length > 0) {
+      console.log('Voices already available, loading immediately');
+      loadVoices();
+    } else {
+      console.log('No voices available yet, waiting for voiceschanged event');
+      // Wait for voices to be loaded
+      window.speechSynthesis.onvoiceschanged = loadVoices;
+      // Also try after a small delay as a fallback
+      setTimeout(loadVoices, 1000);
+    }
+    
+    // Cleanup
+    return () => {
+      if (window.speechSynthesis) {
+        window.speechSynthesis.onvoiceschanged = null;
+      }
+    };
+  }, []);
 
   const handleSave = () => {
+    // Save voice preference to localStorage
+    if (selectedVoice) {
+      localStorage.setItem('selectedVoice', selectedVoice);
+    }
     alert('Settings saved successfully! 🎉');
   };
 
@@ -21,6 +87,16 @@ const Settings = () => {
     setPollutionSensitivity('normal');
     setNotifications(true);
     setDarkMode(false);
+    
+    // Reset voice to default
+    const defaultVoice = availableVoices.find(voice => 
+      voice.lang.includes('en') && (voice.name.includes('Google') || voice.name.includes('Microsoft') || voice.default)
+    ) || availableVoices.find(voice => voice.default) || availableVoices[0];
+    
+    if (defaultVoice) {
+      setSelectedVoice(defaultVoice.name);
+    }
+    
     alert('Settings reset to defaults');
   };
 
@@ -101,6 +177,144 @@ const Settings = () => {
               </div>
             </label>
           </div>
+          
+          {/* Voice Selection */}
+          {voiceAlerts && (
+            <div style={{ marginBottom: '24px' }}>
+              <label style={{ 
+                display: 'block', 
+                fontSize: '14px', 
+                fontWeight: '500',
+                color: '#374151',
+                marginBottom: '8px'
+              }}>
+                🎤 Voice Selection
+              </label>
+              {!voicesLoaded ? (
+                <div style={{ 
+                  padding: '12px',
+                  border: '2px solid #e5e7eb',
+                  borderRadius: '8px',
+                  backgroundColor: '#f9fafb',
+                  textAlign: 'center',
+                  color: '#6b7280'
+                }}>
+                  Loading voices...
+                </div>
+              ) : availableVoices.length > 0 ? (
+                <>
+                  <select 
+                    value={selectedVoice || ''}
+                    onChange={(e) => setSelectedVoice(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '12px',
+                      border: '2px solid #e5e7eb',
+                      borderRadius: '8px',
+                      fontSize: '16px',
+                      backgroundColor: 'white',
+                      cursor: 'pointer',
+                      marginBottom: '8px'
+                    }}
+                  >
+                    {availableVoices
+                      .filter(voice => voice.lang.includes('en') || voice.lang.includes('hi')) // Filter for English and Hindi voices
+                      .map((voice) => (
+                        <option key={voice.name} value={voice.name}>
+                          {voice.name} ({voice.lang}) {voice.default ? '(Default)' : ''}
+                        </option>
+                      ))}
+                  </select>
+                  <div style={{ 
+                    display: 'flex',
+                    gap: '8px',
+                    marginBottom: '4px'
+                  }}>
+                    <button
+                      onClick={() => {
+                        console.log('Preview voice button clicked');
+                        if (selectedVoice && 'speechSynthesis' in window) {
+                          console.log('Selected voice:', selectedVoice);
+                          // Determine language based on selected voice
+                          let lang = 'en-US';
+                          if (selectedVoice.includes('Hindi') || selectedVoice.includes('hi') || selectedVoice.includes('हिन्दी')) {
+                            lang = 'hi-IN';
+                            console.log('Detected Hindi voice, using language:', lang);
+                          } else {
+                            console.log('Using English language:', lang);
+                          }
+                          
+                          const speech = new SpeechSynthesisUtterance('This is a preview of your selected voice.');
+                          speech.lang = lang;
+                          speech.volume = 1;
+                          speech.rate = 1;
+                          speech.pitch = 1;
+                          
+                          const voices = window.speechSynthesis.getVoices();
+                          console.log('Available voices for preview:', voices.map(v => v.name + ' (' + v.lang + ')'));
+                          const voice = voices.find(v => v.name === selectedVoice);
+                          if (voice) {
+                            speech.voice = voice;
+                            console.log('Setting voice for preview:', voice.name, voice.lang);
+                          } else {
+                            console.log('Voice not found for preview:', selectedVoice);
+                          }
+                          
+                          // Add event listeners for debugging
+                          speech.onstart = function(event) {
+                            console.log('Preview speech started');
+                          };
+                          
+                          speech.onend = function(event) {
+                            console.log('Preview speech ended');
+                          };
+                          
+                          speech.onerror = function(event) {
+                            console.error('Preview speech error:', event.error);
+                          };
+                          
+                          window.speechSynthesis.speak(speech);
+                          console.log('Preview speech synthesis command sent');
+                        } else {
+                          console.log('Cannot preview voice: either no voice selected or speech synthesis not supported');
+                        }
+                      }}
+                      style={{
+                        backgroundColor: '#3B82F6',
+                        color: 'white',
+                        padding: '8px 12px',
+                        border: 'none',
+                        borderRadius: '6px',
+                        fontSize: '14px',
+                        fontWeight: '500',
+                        cursor: 'pointer',
+                        flex: '1'
+                      }}
+                    >
+                      🔊 Preview Voice
+                    </button>
+                  </div>
+                  <div style={{ 
+                    fontSize: '12px', 
+                    color: '#6b7280'
+                  }}>
+                    Select your preferred voice for navigation alerts (supports English and Hindi)
+                  </div>
+                </>
+              ) : (
+                <div style={{ 
+                  padding: '12px',
+                  border: '2px solid #e5e7eb',
+                  borderRadius: '8px',
+                  backgroundColor: '#f9fafb',
+                  textAlign: 'center',
+                  color: '#6b7280'
+                }}>
+                  No voices available in your browser. Voice navigation may not work.
+                </div>
+              )}
+            </div>
+          )}
           
           <div style={{ marginBottom: '24px' }}>
             <label style={{ 
