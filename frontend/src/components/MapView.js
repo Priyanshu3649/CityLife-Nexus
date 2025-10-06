@@ -1,6 +1,9 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { GoogleMap, LoadScript, Marker, DirectionsService, DirectionsRenderer } from "@react-google-maps/api";
 
+// Define libraries as a constant to fix performance warning
+const LIBRARIES = ['places', 'directions'];
+
 const MapView = ({ 
   center = { lat: 28.6139, lng: 77.2090 }, 
   zoom = 12, 
@@ -35,7 +38,7 @@ const MapView = ({
   return (
     <LoadScript 
       googleMapsApiKey={googleMapsApiKey} 
-      libraries={['places', 'directions']}
+      libraries={LIBRARIES} // Use constant to fix performance warning
     >
       <GoogleMap
         mapContainerStyle={containerStyle}

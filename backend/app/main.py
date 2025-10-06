@@ -10,9 +10,11 @@ import os
 
 # Add the current directory to the path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# Also add the parent directory to fix import issues
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 
-from core.config import settings
-from api.v1.api import api_router
+from app.core.config import settings
+from app.api.v1.api import api_router
 
 
 @asynccontextmanager

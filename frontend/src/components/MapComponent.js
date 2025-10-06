@@ -1,6 +1,9 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { GoogleMap, LoadScript, Marker, DirectionsService, DirectionsRenderer } from "@react-google-maps/api";
 
+// Define libraries as a constant to fix performance warning
+const LIBRARIES = ['places', 'directions'];
+
 const MapComponent = ({ 
   center = { lat: 28.6139, lng: 77.2090 }, 
   zoom = 12, 
@@ -89,7 +92,7 @@ const MapComponent = ({
   return (
     <LoadScript 
       googleMapsApiKey={googleMapsApiKey} 
-      libraries={['places', 'directions']} // Add directions library
+      libraries={LIBRARIES} // Use constant to fix performance warning
       onError={(error) => console.error("Google Maps API load error:", error)}
       onLoad={() => console.log("Google Maps API loaded successfully")}
     >
