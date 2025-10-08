@@ -191,9 +191,25 @@ async def get_routes_with_aqi(request: RouteWithAQIRequest):
             request.end_coords
         )
         
+        # Filter routes based on user preference
+        preferred_route_type = "fastest"  # default
+        if request.preferences.get("prioritize_air_quality", 0) > 0.6:
+            preferred_route_type = "cleanest"
+        elif request.preferences.get("prioritize_safety", 0) > 0.6:
+            preferred_route_type = "safest"
+        elif request.preferences.get("prioritize_time", 0) > 0.6:
+            preferred_route_type = "fastest"
+        
+        # Filter routes to only include the preferred type
+        filtered_routes = [route for route in routes if route.route_type == preferred_route_type]
+        
+        # If no routes match the preference, use all routes
+        if not filtered_routes:
+            filtered_routes = routes
+        
         # Enhance routes with AQI data
         enhanced_routes = []
-        for route in routes:
+        for route in filtered_routes:
             # Get AQI data along the route
             aqi_data = await aqi_service.get_route_aqi_data(
                 route.waypoints,
@@ -239,9 +255,19 @@ async def get_routes_with_aqi(request: RouteWithAQIRequest):
         return {"routes": enhanced_routes}
         
     except Exception as e:
-        # Return mock data if API fails
-        mock_routes = [
-            {
+        # Return mock data based on preference
+        preferred_route_type = "fastest"  # default
+        if request.preferences.get("prioritize_air_quality", 0) > 0.6:
+            preferred_route_type = "cleanest"
+        elif request.preferences.get("prioritize_safety", 0) > 0.6:
+            preferred_route_type = "safest"
+        elif request.preferences.get("prioritize_time", 0) > 0.6:
+            preferred_route_type = "fastest"
+        
+        mock_routes = []
+        
+        if preferred_route_type == "fastest":
+            mock_routes.append({
                 "id": "1",
                 "name": "Fastest Route",
                 "time": 18,
@@ -251,8 +277,9 @@ async def get_routes_with_aqi(request: RouteWithAQIRequest):
                 "description": "Via main roads with heavy traffic",
                 "start_coords": request.start_coords,
                 "end_coords": request.end_coords
-            },
-            {
+            })
+        elif preferred_route_type == "cleanest":
+            mock_routes.append({
                 "id": "2",
                 "name": "Clean Air Route", 
                 "time": 25,
@@ -262,18 +289,56 @@ async def get_routes_with_aqi(request: RouteWithAQIRequest):
                 "description": "Via parks and residential areas",
                 "start_coords": request.start_coords,
                 "end_coords": request.end_coords
-            },
-            {
+            })
+        elif preferred_route_type == "safest":
+            mock_routes.append({
                 "id": "3",
-                "name": "Balanced Route",
-                "time": 21,
-                "aqi": 120,
-                "distance": 13.1,
-                "type": "balanced",
-                "description": "Optimal time and air quality",
+                "name": "Safest Route",
+                "time": 22,
+                "aqi": 140,
+                "distance": 13.8,
+                "type": "safest",
+                "description": "Via well-lit, secure areas with low accident rates",
                 "start_coords": request.start_coords,
                 "end_coords": request.end_coords
-            }
-        ]
+            })
+        
+        # If no preference matched (balanced), return all routes
+        if not mock_routes:
+            mock_routes = [
+                {
+                    "id": "1",
+                    "name": "Fastest Route",
+                    "time": 18,
+                    "aqi": 160,
+                    "distance": 12.5,
+                    "type": "fastest",
+                    "description": "Via main roads with heavy traffic",
+                    "start_coords": request.start_coords,
+                    "end_coords": request.end_coords
+                },
+                {
+                    "id": "2",
+                    "name": "Clean Air Route", 
+                    "time": 25,
+                    "aqi": 85,
+                    "distance": 14.2,
+                    "type": "cleanest",
+                    "description": "Via parks and residential areas",
+                    "start_coords": request.start_coords,
+                    "end_coords": request.end_coords
+                },
+                {
+                    "id": "3",
+                    "name": "Safest Route",
+                    "time": 22,
+                    "aqi": 140,
+                    "distance": 13.8,
+                    "type": "safest",
+                    "description": "Via well-lit, secure areas with low accident rates",
+                    "start_coords": request.start_coords,
+                    "end_coords": request.end_coords
+                }
+            ]
         
         return {"routes": mock_routes}

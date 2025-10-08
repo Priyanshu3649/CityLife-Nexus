@@ -67,7 +67,7 @@ class AQIService:
         # Add API key header if available
         headers = {}
         openaq_api_key = getattr(settings, 'OPENAQ_API_KEY', None)
-        if openaq_api_key:
+        if openaq_api_key and openaq_api_key != "your-openaq-api-key-here":
             headers['X-API-Key'] = openaq_api_key
         
         try:
@@ -389,6 +389,18 @@ class AQIService:
             cached_data = self.redis_client.get(cache_key)
             
             if cached_data:
+                # Handle different types of cached data
+                if hasattr(cached_data, '__await__'):
+                    # If it's an awaitable, we need to await it (this shouldn't happen with sync Redis client)
+                    return [self._generate_mock_aqi_reading(coordinates)]
+                
+                # Decode bytes to string if needed
+                if isinstance(cached_data, bytes):
+                    cached_data = cached_data.decode('utf-8')
+                elif not isinstance(cached_data, str):
+                    # If it's not a string or bytes, convert to string
+                    cached_data = str(cached_data)
+                
                 data = json.loads(cached_data)
                 reading_time = datetime.fromisoformat(data["reading_time"])
                 

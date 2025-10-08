@@ -119,7 +119,7 @@ async def get_route_options(
 async def optimize_routes(
     origin: CoordinatesSchema,
     destination: CoordinatesSchema,
-    route_type: str = Query("balanced", regex="^(fastest|cleanest|safest|balanced|eco_friendly)$"),
+    route_type: str = Query("fastest", regex="^(fastest|cleanest|safest)$"),
     departure_time: Optional[datetime] = None,
     current_session: Optional[UserSessionResponse] = Depends(get_optional_session)
 ):

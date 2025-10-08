@@ -6,21 +6,25 @@ const NavigationView = () => {
   const navigate = useNavigate();
   const [fromLocation, setFromLocation] = useState('');
   const [toLocation, setToLocation] = useState('');
-  const [routePreference, setRoutePreference] = useState('balanced');
+  const [routePreference, setRoutePreference] = useState('fastest');
   const [vehicleType, setVehicleType] = useState('car');
   const [showRoutes, setShowRoutes] = useState(false);
   const [routes, setRoutes] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [selectedRouteId, setSelectedRouteId] = useState(null);
   const [trafficLights, setTrafficLights] = useState([]);
-  const [voiceNavigation, setVoiceNavigation] = useState(true);
-  const [userLocation, setUserLocation] = useState(null);
   const [mapCenter, setMapCenter] = useState({ lat: 28.6139, lng: 77.2090 });
   
+  // Voice navigation state
+  const [isVoiceEnabled, setIsVoiceEnabled] = useState(false);
+  const [voices, setVoices] = useState([]);
+  const [selectedVoice, setSelectedVoice] = useState(null);
+  
+  // Keep track of announced signals to prevent repetition (moved outside useEffect)
+  const announcedSignals = useRef(new Set());
+  
   // New states for advanced features
-  const [tripLogs, setTripLogs] = useState([]);
   const [ecoScore, setEcoScore] = useState(null);
-  const [isRerouting, setIsRerouting] = useState(false);
   const [emergencyAlert, setEmergencyAlert] = useState(null);
   
   // Google Maps autocomplete states
@@ -51,6 +55,161 @@ const NavigationView = () => {
     pollutionExposure: 0,
     baselineIdling: 0
   });
+
+  const calculateDistance = useCallback((coord1, coord2) => {
+    const R = 6371;
+    const dLat = (coord2.lat - coord1.lat) * Math.PI / 180;
+    const dLon = (coord2.lng - coord1.lng) * Math.PI / 180;
+    const a = 
+      Math.sin(dLat/2) * Math.sin(dLat/2) +
+      Math.cos(coord1.lat * Math.PI / 180) * Math.cos(coord2.lat * Math.PI / 180) * 
+      Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c;
+  }, []);
+
+  // Linear interpolation for AQI values between sensors
+  const interpolateAQI = useCallback((point, sensor1, sensor2) => {
+    if (!sensor1 || !sensor2) return 100; // Default AQI
+    
+    const distance1 = calculateDistance(point, sensor1.coordinates);
+    const distance2 = calculateDistance(point, sensor2.coordinates);
+    const totalDistance = distance1 + distance2;
+    
+    if (totalDistance === 0) return sensor1.aqi;
+    
+    // Linear interpolation formula
+    const weight1 = distance2 / totalDistance;
+    const weight2 = distance1 / totalDistance;
+    
+    return Math.round(sensor1.aqi * weight1 + sensor2.aqi * weight2);
+  }, [calculateDistance]);
+
+  // Get AQI for a specific location (moved to top to avoid temporal dead zone)
+  const getAQIForLocation = useCallback(async (coordinates) => {
+    try {
+      // Fetch real AQI data from backend API
+      const response = await fetch(`http://localhost:8001/api/v1/aqi/measurements`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          latitude: coordinates.lat,
+          longitude: coordinates.lng
+        })
+      });
+      
+      if (response.ok) {
+        const aqiData = await response.json();
+        if (aqiData && aqiData.length > 0) {
+          // Return the AQI value from the most recent reading
+          return aqiData[0].aqi_value;
+        }
+      }
+      
+      // Fallback to mock data if API fails
+      console.warn('Failed to fetch real AQI data, using mock data');
+      const mockAQIValues = [
+        { coordinates: { lat: 28.6315, lng: 77.2167 }, aqi: 120 },
+        { coordinates: { lat: 28.6280, lng: 77.2410 }, aqi: 180 },
+        { coordinates: { lat: 28.6129, lng: 77.2295 }, aqi: 90 }
+      ];
+      
+      // Find the two closest AQI sensors
+      const sortedSensors = [...mockAQIValues].sort((a, b) => 
+        calculateDistance(coordinates, a.coordinates) - calculateDistance(coordinates, b.coordinates)
+      );
+      
+      if (sortedSensors.length >= 2) {
+        return interpolateAQI(coordinates, sortedSensors[0], sortedSensors[1]);
+      }
+      
+      return sortedSensors[0] ? sortedSensors[0].aqi : 100;
+    } catch (error) {
+      console.error('Error fetching AQI data:', error);
+      // Fallback to mock data if API fails
+      const mockAQIValues = [
+        { coordinates: { lat: 28.6315, lng: 77.2167 }, aqi: 120 },
+        { coordinates: { lat: 28.6280, lng: 77.2410 }, aqi: 180 },
+        { coordinates: { lat: 28.6129, lng: 77.2295 }, aqi: 90 }
+      ];
+      
+      // Find the two closest AQI sensors
+      const sortedSensors = [...mockAQIValues].sort((a, b) => 
+        calculateDistance(coordinates, a.coordinates) - calculateDistance(coordinates, b.coordinates)
+      );
+      
+      if (sortedSensors.length >= 2) {
+        return interpolateAQI(coordinates, sortedSensors[0], sortedSensors[1]);
+      }
+      
+      return sortedSensors[0] ? sortedSensors[0].aqi : 100;
+    }
+  }, [calculateDistance, interpolateAQI]);
+  // Initialize speech synthesis
+  useEffect(() => {
+    const initSpeech = () => {
+      if ('speechSynthesis' in window) {
+        // Load voices
+        const loadVoices = () => {
+          const availableVoices = speechSynthesis.getVoices();
+          setVoices(availableVoices);
+          
+          // Select a default English voice
+          const defaultVoice = availableVoices.find(voice => 
+            voice.lang.includes('en') && voice.default
+          ) || availableVoices.find(voice => 
+            voice.lang.includes('en')
+          );
+          
+          setSelectedVoice(defaultVoice || availableVoices[0]);
+        };
+        
+        // Load voices immediately
+        loadVoices();
+        
+        // Load voices again when they become available
+        speechSynthesis.onvoiceschanged = loadVoices;
+        
+        return () => {
+          speechSynthesis.onvoiceschanged = null;
+        };
+      }
+    };
+    
+    initSpeech();
+  }, []);
+
+  // Cleanup speech synthesis when component unmounts
+  useEffect(() => {
+    return () => {
+      // Cancel any ongoing speech when component unmounts
+      if ('speechSynthesis' in window) {
+        speechSynthesis.cancel();
+      }
+    };
+  }, []);
+
+  // Speak function
+  const speak = useCallback((text) => {
+    if (!isVoiceEnabled || !('speechSynthesis' in window)) return;
+    
+    // Cancel any ongoing speech to prevent queue buildup
+    speechSynthesis.cancel();
+    
+    try {
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.voice = selectedVoice;
+      utterance.rate = 1.0;
+      utterance.pitch = 1.0;
+      utterance.volume = 1.0;
+      
+      speechSynthesis.speak(utterance);
+    } catch (error) {
+      console.error('Speech synthesis error:', error);
+    }
+  }, [isVoiceEnabled, selectedVoice]);
 
   // Close dropdowns when clicking outside
   useEffect(() => {
@@ -111,6 +270,52 @@ const NavigationView = () => {
     return () => clearInterval(timer);
   }, [trafficLights]);
 
+  // Emergency auto-reroute function
+  const triggerReroute = useCallback(async () => {
+    if (!selectedFromCoords || !selectedToCoords) return;
+    
+    try {
+      const response = await fetch('http://localhost:8001/api/v1/maps/reroute', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          start_coords: {
+            latitude: userPosition ? userPosition.lat : selectedFromCoords.lat,
+            longitude: userPosition ? userPosition.lng : selectedFromCoords.lng
+          },
+          end_coords: {
+            latitude: selectedToCoords.lat,
+            longitude: selectedToCoords.lng
+          },
+          preferences: {
+            prioritize_time: routePreference === 'fastest' ? 0.8 : 0.2,
+            prioritize_air_quality: routePreference === 'cleanest' ? 0.8 : 0.2,
+            prioritize_safety: routePreference === 'safest' ? 0.8 : 0.2,
+            max_detour_minutes: 15
+          },
+          vehicle_type: vehicleType,
+          emergency_conditions: emergencyAlert
+        })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setRoutes([data.route]); // Assuming reroute returns a single optimal route
+        setSelectedRouteId(data.route.id);
+        await fetchTrafficLightData(
+          userPosition || selectedFromCoords, 
+          selectedToCoords
+        );
+        speak(`Emergency rerouting activated. New route calculated.`);
+      }
+    } catch (error) {
+      console.error('Error during rerouting:', error);
+      speak(`Error during emergency rerouting. Please check manually.`);
+    }
+  }, [selectedFromCoords, selectedToCoords, userPosition, routePreference, vehicleType, emergencyAlert, speak]);
+
   // Emergency auto-reroute monitoring
   useEffect(() => {
     if (!isNavigating) return;
@@ -118,7 +323,7 @@ const NavigationView = () => {
     const monitorConditions = async () => {
       try {
         // Check for emergency conditions (accidents, congestion, pollution spikes)
-        const response = await fetch('http://127.0.0.1:8001/api/v1/emergency/alerts', {
+        const response = await fetch('http://localhost:8001/api/v1/emergency/alerts', {
           method: 'GET',
           headers: {
             'Content-Type': 'application/json',
@@ -131,10 +336,11 @@ const NavigationView = () => {
             const criticalAlert = alerts.find(alert => alert.severity === 'critical');
             if (criticalAlert) {
               setEmergencyAlert(criticalAlert);
-              speakAlert(`Emergency Alert: ${criticalAlert.message}. Rerouting due to ${criticalAlert.type} ahead.`);
               triggerReroute();
             }
           }
+        } else {
+          console.error('Failed to fetch emergency alerts');
         }
       } catch (error) {
         console.error('Error checking emergency conditions:', error);
@@ -143,7 +349,7 @@ const NavigationView = () => {
     
     const interval = setInterval(monitorConditions, 30000); // Check every 30 seconds
     return () => clearInterval(interval);
-  }, [isNavigating]);
+  }, [isNavigating, triggerReroute]);
 
   const getDirectionIcon = (maneuver) => {
     switch (maneuver) {
@@ -194,7 +400,7 @@ const NavigationView = () => {
         { latitude: toCoords.lat, longitude: toCoords.lng }
       ];
       
-      const response = await fetch('http://127.0.0.1:8001/api/v1/signals/along-route', {
+      const response = await fetch('http://localhost:8001/api/v1/signals/along-route', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -207,6 +413,12 @@ const NavigationView = () => {
       if (response.ok) {
         const signals = await response.json();
         console.log('Traffic light data received:', signals);
+        
+        // If no signals found, that's OK - it just means no traffic lights along this route
+        if (signals.length === 0) {
+          console.log('No traffic lights found along the route - this is normal for some routes');
+        }
+        
         const trafficLightsData = signals.map(signal => ({
           light_id: signal.signal_id,
           coordinates: { 
@@ -222,6 +434,8 @@ const NavigationView = () => {
         console.log('Setting traffic lights data:', trafficLightsData);
         setTrafficLights(trafficLightsData);
       } else {
+        // Only use mock data if API fails
+        console.error('Failed to fetch traffic light data, using mock data');
         const mockTrafficLights = [
           {
             light_id: 'cp_outer_circle',
@@ -246,6 +460,7 @@ const NavigationView = () => {
       }
     } catch (error) {
       console.error('Error fetching traffic light data:', error);
+      // Only use mock data if API fails
       const mockTrafficLights = [
         {
           light_id: 'cp_outer_circle',
@@ -270,23 +485,6 @@ const NavigationView = () => {
     }
   };
 
-  // Linear interpolation for AQI values between sensors
-  const interpolateAQI = useCallback((point, sensor1, sensor2) => {
-    if (!sensor1 || !sensor2) return 100; // Default AQI
-    
-    const distance1 = calculateDistance(point, sensor1.coordinates);
-    const distance2 = calculateDistance(point, sensor2.coordinates);
-    const totalDistance = distance1 + distance2;
-    
-    if (totalDistance === 0) return sensor1.aqi;
-    
-    // Linear interpolation formula
-    const weight1 = distance2 / totalDistance;
-    const weight2 = distance1 / totalDistance;
-    
-    return Math.round(sensor1.aqi * weight1 + sensor2.aqi * weight2);
-  }, []);
-
   // Google Places Autocomplete
   const searchPlaces = async (query, setSuggestions) => {
     if (query.length < 3) {
@@ -295,12 +493,13 @@ const NavigationView = () => {
     }
 
     try {
-      const response = await fetch(`http://127.0.0.1:8001/api/v1/maps/autocomplete?query=${encodeURIComponent(query)}`);
+      const response = await fetch(`http://localhost:8001/api/v1/maps/autocomplete?query=${encodeURIComponent(query)}`);
       if (response.ok) {
         const data = await response.json();
         setSuggestions(data.predictions || []);
       } else {
-        // If API fails, provide mock suggestions
+        // Only use mock suggestions if API fails
+        console.error('Failed to fetch place suggestions, using mock data');
         setSuggestions([
           { description: `${query} - Delhi, India`, place_id: 'mock1' },
           { description: `${query} - Mumbai, India`, place_id: 'mock2' },
@@ -309,7 +508,7 @@ const NavigationView = () => {
       }
     } catch (error) {
       console.error('Error fetching place suggestions:', error);
-      // Provide mock suggestions when API fails
+      // Only use mock suggestions when API fails
       setSuggestions([
         { description: `${query}, Delhi, India`, place_id: 'mock1' },
         { description: `${query}, Mumbai, India`, place_id: 'mock2' },
@@ -338,7 +537,7 @@ const NavigationView = () => {
     setFromSuggestions([]);
     
     try {
-      const response = await fetch(`http://127.0.0.1:8001/api/v1/maps/geocode?address=${encodeURIComponent(suggestion.description)}`);
+      const response = await fetch(`http://localhost:8001/api/v1/maps/geocode?address=${encodeURIComponent(suggestion.description)}`);
       if (response.ok) {
         const data = await response.json();
         if (data.coordinates) {
@@ -348,9 +547,13 @@ const NavigationView = () => {
           };
           setSelectedFromCoords(convertedCoords);
         }
+      } else {
+        // Only use mock coordinates if API fails
+        console.error('Failed to fetch geocode data, using mock coordinates');
       }
     } catch (error) {
       console.error('Error fetching geocode data:', error);
+      // Don't set mock coordinates here - let the user know there was an error
     }
   };
 
@@ -360,7 +563,7 @@ const NavigationView = () => {
     setToSuggestions([]);
     
     try {
-      const response = await fetch(`http://127.0.0.1:8001/api/v1/maps/geocode?address=${encodeURIComponent(suggestion.description)}`);
+      const response = await fetch(`http://localhost:8001/api/v1/maps/geocode?address=${encodeURIComponent(suggestion.description)}`);
       if (response.ok) {
         const data = await response.json();
         if (data.coordinates) {
@@ -370,9 +573,13 @@ const NavigationView = () => {
           };
           setSelectedToCoords(convertedCoords);
         }
+      } else {
+        // Only use mock coordinates if API fails
+        console.error('Failed to fetch geocode data, using mock coordinates');
       }
     } catch (error) {
       console.error('Error fetching geocode data:', error);
+      // Don't set mock coordinates here - let the user know there was an error
     }
   };
 
@@ -392,57 +599,6 @@ const NavigationView = () => {
     setShowToSuggestions(false);
   };
 
-  // Emergency auto-reroute function
-  const triggerReroute = async () => {
-    if (!selectedFromCoords || !selectedToCoords) return;
-    
-    setIsRerouting(true);
-    speakAlert("Rerouting due to emergency conditions ahead.");
-    
-    try {
-      const response = await fetch('http://127.0.0.1:8001/api/v1/maps/reroute', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          start_coords: {
-            latitude: userPosition ? userPosition.lat : selectedFromCoords.lat,
-            longitude: userPosition ? userPosition.lng : selectedFromCoords.lng
-          },
-          end_coords: {
-            latitude: selectedToCoords.lat,
-            longitude: selectedToCoords.lng
-          },
-          preferences: {
-            prioritize_time: routePreference === 'fastest' ? 0.8 : routePreference === 'balanced' ? 0.4 : 0.2,
-            prioritize_air_quality: routePreference === 'cleanest' ? 0.8 : routePreference === 'balanced' ? 0.4 : 0.2,
-            prioritize_safety: 0.9, // High priority for safety in rerouting
-            max_detour_minutes: 15
-          },
-          vehicle_type: vehicleType,
-          emergency_conditions: emergencyAlert
-        })
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        setRoutes([data.route]); // Assuming reroute returns a single optimal route
-        setSelectedRouteId(data.route.id);
-        await fetchTrafficLightData(
-          userPosition || selectedFromCoords, 
-          selectedToCoords
-        );
-        speakAlert("New route calculated. Follow the updated directions.");
-      }
-    } catch (error) {
-      console.error('Error during rerouting:', error);
-      speakAlert("Unable to calculate new route. Continue on current path with caution.");
-    } finally {
-      setIsRerouting(false);
-    }
-  };
-
   const handleRouteSearch = async () => {
     if (!fromLocation || !toLocation) {
       alert('Please enter both starting location and destination');
@@ -459,7 +615,7 @@ const NavigationView = () => {
     setSelectedRouteId(null);
 
     try {
-      const response = await fetch('http://127.0.0.1:8001/api/v1/maps/routes-with-aqi', {
+      const response = await fetch('http://localhost:8001/api/v1/maps/routes-with-aqi', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -474,9 +630,9 @@ const NavigationView = () => {
             longitude: selectedToCoords.lng
           },
           preferences: {
-            prioritize_time: routePreference === 'fastest' ? 0.8 : routePreference === 'balanced' ? 0.4 : 0.2,
-            prioritize_air_quality: routePreference === 'cleanest' ? 0.8 : routePreference === 'balanced' ? 0.4 : 0.2,
-            prioritize_safety: 0.2,
+            prioritize_time: routePreference === 'fastest' ? 0.8 : 0.2,
+            prioritize_air_quality: routePreference === 'cleanest' ? 0.8 : 0.2,
+            prioritize_safety: routePreference === 'safest' ? 0.8 : 0.2,
             max_detour_minutes: 10
           },
           vehicle_type: vehicleType
@@ -493,36 +649,54 @@ const NavigationView = () => {
       }
     } catch (error) {
       console.error('Error fetching routes:', error);
-      const mockRoutes = [
-        {
-          id: '1',
-          name: 'Fastest Route',
-          time: 18,
-          aqi: 160,
-          distance: 12.5,
-          type: 'fastest',
-          description: 'Via main roads with heavy traffic'
-        },
-        {
-          id: '2', 
-          name: 'Clean Air Route',
-          time: 25,
-          aqi: 85,
-          distance: 14.2,
-          type: 'cleanest',
-          description: 'Via parks and residential areas'
-        },
-        {
-          id: '3',
-          name: 'Balanced Route',
-          time: 21,
-          aqi: 120,
-          distance: 13.1,
-          type: 'balanced',
-          description: 'Optimal time and air quality'
-        }
-      ];
-      setRoutes(mockRoutes);
+      // Only use mock data if API fails
+      let mockRoute;
+      switch (routePreference) {
+        case 'fastest':
+          mockRoute = {
+            id: '1',
+            name: 'Fastest Route',
+            time: 18,
+            aqi: 160,
+            distance: 12.5,
+            type: 'fastest',
+            description: 'Via main roads with heavy traffic'
+          };
+          break;
+        case 'cleanest':
+          mockRoute = {
+            id: '2',
+            name: 'Clean Air Route',
+            time: 25,
+            aqi: 85,
+            distance: 14.2,
+            type: 'cleanest',
+            description: 'Via parks and residential areas'
+          };
+          break;
+        case 'safest':
+          mockRoute = {
+            id: '3',
+            name: 'Safest Route',
+            time: 22,
+            aqi: 140,
+            distance: 13.8,
+            type: 'safest',
+            description: 'Via well-lit, secure areas with low accident rates'
+          };
+          break;
+        default:
+          mockRoute = {
+            id: '1',
+            name: 'Fastest Route',
+            time: 18,
+            aqi: 160,
+            distance: 12.5,
+            type: 'fastest',
+            description: 'Via main roads with heavy traffic'
+          };
+      }
+      setRoutes([mockRoute]);
       setShowRoutes(true);
     } finally {
       setIsLoading(false);
@@ -555,14 +729,13 @@ const NavigationView = () => {
     setSelectedRouteId(route.id);
     const selectionMessage = `🗺️ Route selected: ${route.name}. Estimated time: ${route.time} minutes. Air quality index: ${route.aqi}. Click "START NAV" to begin turn-by-turn navigation within the app.`;
     alert(selectionMessage);
-    speakAlert(selectionMessage);
+    speak(selectionMessage);
   };
 
   const startNavigation = async (route) => {
     if (selectedFromCoords && selectedToCoords) {
       setSelectedRouteId(route.id);
       setIsNavigating(true);
-      setTripLogs([]); // Reset trip logs
       setEcoScore(null); // Reset eco score
       setEmergencyAlert(null); // Reset emergency alerts
       setTripStats({
@@ -573,6 +746,9 @@ const NavigationView = () => {
         pollutionExposure: 0,
         baselineIdling: 0
       });
+      
+      // Clear announced signals when starting new navigation
+      announcedSignals.current.clear();
       
       await fetchTrafficLightData(selectedFromCoords, selectedToCoords);
       
@@ -600,7 +776,7 @@ const NavigationView = () => {
                     detail: `for ${firstStep.distance.text}`
                   };
                   setCurrentInstruction(newInstruction);
-                  speakNavigationInstruction(newInstruction);
+                  speak(`${newInstruction.text} ${newInstruction.detail}`);
                 }
               } else {
                 console.error('Directions request failed due to ' + status);
@@ -611,7 +787,7 @@ const NavigationView = () => {
                   detail: 'for 200 meters'
                 };
                 setCurrentInstruction(fallbackInstruction);
-                speakNavigationInstruction(fallbackInstruction);
+                speak('Continue straight for 200 meters');
               }
             }
           );
@@ -623,7 +799,7 @@ const NavigationView = () => {
             detail: 'for 200 meters'
           };
           setCurrentInstruction(fallbackInstruction);
-          speakNavigationInstruction(fallbackInstruction);
+          speak('Continue straight for 200 meters');
         }
       } catch (error) {
         console.error('Error fetching directions:', error);
@@ -634,7 +810,7 @@ const NavigationView = () => {
           detail: 'for 200 meters'
         };
         setCurrentInstruction(fallbackInstruction);
-        speakNavigationInstruction(fallbackInstruction);
+        speak('Continue straight for 200 meters');
       }
       
       setTimeout(() => {
@@ -645,108 +821,26 @@ const NavigationView = () => {
       }, 100);
       
       const startMessage = `🧭 Navigation started! Following route: ${route.name}. Estimated time: ${route.time} minutes. Follow the directions on the map and listen for traffic advisories.`;
-      alert(startMessage);
-      speakAlert(startMessage);
+      speak(startMessage);
     } else {
       const errorMessage = 'Please select valid start and end locations first.';
-      alert(errorMessage);
-      speakAlert(errorMessage);
+      speak(errorMessage);
     }
   };
 
-  const calculateDistance = (coord1, coord2) => {
-    const R = 6371;
-    const dLat = (coord2.lat - coord1.lat) * Math.PI / 180;
-    const dLon = (coord2.lng - coord1.lng) * Math.PI / 180;
-    const a = 
-      Math.sin(dLat/2) * Math.sin(dLat/2) +
-      Math.cos(coord1.lat * Math.PI / 180) * Math.cos(coord2.lat * Math.PI / 180) * 
-      Math.sin(dLon/2) * Math.sin(dLon/2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-    return R * c;
-  };
-
-  const speakAlert = (text) => {
-    console.log('speakAlert called with:', text);
-    if (!voiceNavigation) {
-      console.log('Voice navigation is disabled');
-      return;
-    }
-    
-    if ('speechSynthesis' in window) {
-      // Get selected voice from localStorage
-      const savedVoiceName = localStorage.getItem('selectedVoice');
-      
-      // Determine language based on selected voice or text content
-      let lang = 'en-US';
-      if (savedVoiceName) {
-        // Check if the selected voice is for Hindi
-        if (savedVoiceName.includes('Hindi') || savedVoiceName.includes('hi') || savedVoiceName.includes('हिन्दी')) {
-          lang = 'hi-IN';
-          console.log('Using Hindi language for voice:', savedVoiceName);
-        } else {
-          console.log('Using English language for voice:', savedVoiceName);
-        }
-      } else if (text.includes('नेविगेशन') || text.includes('हरियाणा') || text.includes('उत्तर प्रदेश')) {
-        // Fallback detection based on Hindi text content
-        lang = 'hi-IN';
-        console.log('Detected Hindi content, using hi-IN language');
-      }
-      
-      const speech = new SpeechSynthesisUtterance(text);
-      speech.lang = lang;
-      speech.volume = 1;
-      speech.rate = 1;
-      speech.pitch = 1;
-      
-      console.log('Attempting to speak:', text, 'with language:', lang);
-      
-      if (savedVoiceName) {
-        const voices = window.speechSynthesis.getVoices();
-        console.log('Available voices:', voices.map(v => v.name + ' (' + v.lang + ')'));
-        const selectedVoice = voices.find(voice => voice.name === savedVoiceName);
-        if (selectedVoice) {
-          speech.voice = selectedVoice;
-          console.log('Using selected voice:', selectedVoice.name, selectedVoice.lang);
-        } else {
-          console.log('Selected voice not found:', savedVoiceName);
-        }
-      }
-      
-      // Add event listeners for debugging
-      speech.onstart = function(event) {
-        console.log('Speech started');
-      };
-      
-      speech.onend = function(event) {
-        console.log('Speech ended');
-      };
-      
-      speech.onerror = function(event) {
-        console.error('Speech error:', event.error);
-      };
-      
-      window.speechSynthesis.speak(speech);
-      console.log('Speech synthesis command sent');
-    } else {
-      console.log('Text-to-speech not supported in this browser');
-    }
-  };
-
-  const speakNavigationInstruction = (instruction) => {
-    speakAlert(`Navigation: ${instruction.text} ${instruction.detail}`);
-  };
-
-  // Monitor traffic lights and provide advisories during navigation
+  // Monitor traffic light advisories during navigation
   useEffect(() => {
     console.log('Traffic light advisory system triggered', { isNavigating, trafficLightsLength: trafficLights.length, selectedFromCoords });
-    if (!isNavigating || trafficLights.length === 0 || !selectedFromCoords) {
-      console.log('Traffic light advisory system skipped', { isNavigating, trafficLightsLength: trafficLights.length, selectedFromCoords });
+    if (!isNavigating || !selectedFromCoords) {
+      console.log('Traffic light advisory system skipped', { isNavigating, trafficLightsLength: trafficLights.length, selectedFromCoords: !!selectedFromCoords });
       return;
     }
     
-    // Keep track of announced signals to prevent repetition
-    const announcedSignals = new Set();
+    // It's OK if there are no traffic lights - just continue without advisories
+    if (trafficLights.length === 0) {
+      console.log('No traffic lights to monitor - advisories will not be provided for this route');
+      return;
+    }
     
     const advisoryTimer = setInterval(() => {
       const lightsInRange = trafficLights
@@ -770,20 +864,36 @@ const NavigationView = () => {
         const lightId = light.intersection_name || light.light_id || `TF_${index + 1}`;
         
         // Update trip statistics
-        setTripStats(prev => {
-          const newStats = { ...prev };
-          if (color === 'red') {
-            newStats.signalsOnRed += 1;
-            newStats.idlingTime += timeRemaining;
-          } else if (color === 'green') {
-            newStats.signalsOnGreen += 1;
-          }
-          newStats.pollutionExposure += (getAQIForLocation(light.coordinates) * (timeRemaining / 60)); // AQI * hours
-          return newStats;
+        // Update trip statistics with AQI data
+        getAQIForLocation(light.coordinates).then(aqiValue => {
+          setTripStats(prev => {
+            const newStats = { ...prev };
+            if (color === 'red') {
+              newStats.signalsOnRed += 1;
+              newStats.idlingTime += timeRemaining;
+            } else if (color === 'green') {
+              newStats.signalsOnGreen += 1;
+            }
+            newStats.pollutionExposure += (aqiValue * (timeRemaining / 60)); // AQI * hours
+            return newStats;
+          });
+        }).catch(error => {
+          console.error('Error getting AQI for location:', error);
+          // Use default AQI value of 100 if there's an error
+          setTripStats(prev => {
+            const newStats = { ...prev };
+            if (color === 'red') {
+              newStats.signalsOnRed += 1;
+              newStats.idlingTime += timeRemaining;
+            } else if (color === 'green') {
+              newStats.signalsOnGreen += 1;
+            }
+            newStats.pollutionExposure += (100 * (timeRemaining / 60)); // Default AQI * hours
+            return newStats;
+          });
         });
         
         const recommendedSpeed = calculateRecommendedSpeed(distanceMeters, timeRemaining, color);
-        const mlAdvisory = getMLBasedAdvisory(light, distanceMeters);
         
         // Create a unique identifier for this signal state
         const signalStateId = `${lightId}-${color}-${timeRemaining}`;
@@ -818,21 +928,23 @@ const NavigationView = () => {
         }
         
         // Only announce if we haven't announced this exact signal state recently
-        if (advisoryText && !announcedSignals.has(signalStateId)) {
+        if (advisoryText && !announcedSignals.current.has(signalStateId)) {
           console.log(`Traffic Advisory ${index + 1}:`, advisoryText);
-          speakAlert(advisoryText);
-          announcedSignals.add(signalStateId);
+          announcedSignals.current.add(signalStateId);
+          
+          // Speak the advisory
+          speak(advisoryText);
           
           // Remove this signal state from the set after 10 seconds to allow re-announcement
           setTimeout(() => {
-            announcedSignals.delete(signalStateId);
+            announcedSignals.current.delete(signalStateId);
           }, 10000);
         }
       });
     }, 5000);
     
     return () => clearInterval(advisoryTimer);
-  }, [isNavigating, trafficLights, selectedFromCoords, userPosition, voiceNavigation]);
+  }, [isNavigating, trafficLights, selectedFromCoords, userPosition, speak, getAQIForLocation]);
 
   // Simulate user position updates during navigation
   useEffect(() => {
@@ -840,7 +952,6 @@ const NavigationView = () => {
     
     // Store directions and current step
     let directions = null;
-    let currentStepIndex = 0;
     let steps = [];
     
     // Fetch real directions when navigation starts
@@ -872,7 +983,7 @@ const NavigationView = () => {
                   detail: `for ${firstStep.distance.text}`
                 };
                 setCurrentInstruction(newInstruction);
-                speakNavigationInstruction(newInstruction);
+                speak(`${newInstruction.text} ${newInstruction.detail}`);
               }
             } else {
               console.error('Directions request failed due to ' + status);
@@ -883,7 +994,7 @@ const NavigationView = () => {
                 detail: 'for 200 meters'
               };
               setCurrentInstruction(fallbackInstruction);
-              speakNavigationInstruction(fallbackInstruction);
+              speak('Continue straight for 200 meters');
             }
           }
         );
@@ -958,12 +1069,12 @@ const NavigationView = () => {
           // Trip completed - calculate Eco-Score
           const finalEcoScore = calculateEcoScore(tripStats);
           setEcoScore(finalEcoScore);
-          speakAlert(`Trip completed! ${finalEcoScore.signalsOnGreen} signals caught green, ${finalEcoScore.pollutionReduction}% lower pollution exposure, ${finalEcoScore.fuelSaved}ml fuel saved.`);
+          speak('You have reached your destination. Trip completed.');
         }
         
         if (newInstruction && newInstruction.text !== currentInstruction.text) {
           setCurrentInstruction(newInstruction);
-          speakNavigationInstruction(newInstruction);
+          speak(`${newInstruction.text} ${newInstruction.detail}`);
         } else if (newInstruction) {
           setCurrentInstruction(newInstruction);
         }
@@ -973,7 +1084,7 @@ const NavigationView = () => {
     }, 1000);
     
     return () => clearInterval(interval);
-  }, [isNavigating, selectedFromCoords, selectedToCoords, currentInstruction, tripStats, calculateEcoScore]);
+  }, [isNavigating, selectedFromCoords, selectedToCoords, currentInstruction, tripStats, calculateEcoScore, speak]);
 
   const toggleFullScreen = () => {
     const element = document.documentElement;
@@ -1013,99 +1124,12 @@ const NavigationView = () => {
     return null;
   };
 
-  const getMLBasedAdvisory = (light, distanceMeters, userSpeed = 40) => {
-    const { current_state, time_remaining } = light;
-    const color = current_state.color;
-    const timeToReach = (distanceMeters / 1000) / (userSpeed / 3600);
-    
-    let recommendation = {};
-    
-    if (color === 'red') {
-      if (timeToReach < time_remaining - 5) {
-        recommendation = {
-          action: 'slow_down',
-          message: 'Slow down to reduce fuel consumption while waiting',
-          speedAdjustment: -10
-        };
-      } else if (timeToReach > time_remaining + 10) {
-        recommendation = {
-          action: 'maintain_speed',
-          message: 'Maintain current speed, light will be green when you arrive',
-          speedAdjustment: 0
-        };
-      } else {
-        recommendation = {
-          action: 'optimal_approach',
-          message: 'Approach at optimal speed to catch the green light',
-          speedAdjustment: 5
-        };
-      }
-    } else if (color === 'green') {
-      if (timeToReach < time_remaining * 0.8) {
-        recommendation = {
-          action: 'maintain_speed',
-          message: 'Maintain current speed, you\'ll clear the intersection comfortably',
-          speedAdjustment: 0
-        };
-      } else if (timeToReach > time_remaining * 1.2) {
-        recommendation = {
-          action: 'slight_acceleration',
-          message: 'Slight acceleration to clear intersection before yellow light',
-          speedAdjustment: 5
-        };
-      } else {
-        recommendation = {
-          action: 'optimal_approach',
-          message: 'Current approach is optimal for green light clearance',
-          speedAdjustment: 0
-        };
-      }
-    } else if (color === 'yellow') {
-      if (timeToReach < time_remaining * 0.7) {
-        recommendation = {
-          action: 'maintain_speed',
-          message: 'Maintain speed to clear intersection before red light',
-          speedAdjustment: 0
-        };
-      } else {
-        recommendation = {
-          action: 'prepare_to_stop',
-          message: 'Prepare to stop safely before the intersection',
-          speedAdjustment: -20
-        };
-      }
-    }
-    
-    return recommendation;
-  };
-
-  const getAQIForLocation = (coordinates) => {
-    // Mock AQI values for demonstration
-    const mockAQIValues = [
-      { coordinates: { lat: 28.6315, lng: 77.2167 }, aqi: 120 },
-      { coordinates: { lat: 28.6280, lng: 77.2410 }, aqi: 180 },
-      { coordinates: { lat: 28.6129, lng: 77.2295 }, aqi: 90 }
-    ];
-    
-    // Find the two closest AQI sensors
-    const sortedSensors = mockAQIValues.sort((a, b) => 
-      calculateDistance(coordinates, a.coordinates) - calculateDistance(coordinates, b.coordinates)
-    );
-    
-    if (sortedSensors.length >= 2) {
-      return interpolateAQI(coordinates, sortedSensors[0], sortedSensors[1]);
-    }
-    
-    return sortedSensors[0] ? sortedSensors[0].aqi : 100;
-  };
-
   const getCurrentLocation = () => {
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         (position) => {
           const { latitude, longitude } = position.coords;
           const userLoc = { lat: latitude, lng: longitude };
-          setUserLocation(userLoc);
           setMapCenter(userLoc);
           setFromLocation('Current Location');
           setSelectedFromCoords(userLoc);
@@ -1244,21 +1268,43 @@ const NavigationView = () => {
               </h2>
               <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                 <label style={{ 
-                  display: 'flex', 
-                  alignItems: 'center', 
-                  gap: '8px', 
                   fontSize: '14px',
-                  color: '#4b5563',
-                  fontWeight: '500'
+                  fontWeight: '500',
+                  color: '#374151',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px'
                 }}>
                   <input
                     type="checkbox"
-                    checked={voiceNavigation}
-                    onChange={(e) => setVoiceNavigation(e.target.checked)}
+                    checked={isVoiceEnabled}
+                    onChange={(e) => setIsVoiceEnabled(e.target.checked)}
                     style={{ width: '16px', height: '16px' }}
                   />
                   Voice Navigation
                 </label>
+                {isVoiceEnabled && voices.length > 0 && (
+                  <select
+                    value={selectedVoice?.name || ''}
+                    onChange={(e) => {
+                      const voice = voices.find(v => v.name === e.target.value);
+                      setSelectedVoice(voice);
+                    }}
+                    style={{
+                      padding: '4px 8px',
+                      border: '1px solid #d1d5db',
+                      borderRadius: '4px',
+                      fontSize: '12px',
+                      backgroundColor: 'white'
+                    }}
+                  >
+                    {voices.map((voice, index) => (
+                      <option key={index} value={voice.name}>
+                        {voice.name} ({voice.lang})
+                      </option>
+                    ))}
+                  </select>
+                )}
               </div>
             </div>
 
@@ -1459,7 +1505,7 @@ const NavigationView = () => {
                   }}
                 >
                   <option value="fastest">Fastest Route</option>
-                  <option value="balanced">Balanced Route</option>
+                  <option value="safest">Safest Route</option>
                   <option value="cleanest">Cleanest Air Route</option>
                 </select>
               </div>
@@ -1549,7 +1595,7 @@ const NavigationView = () => {
               fontSize: '20px',
               fontWeight: '600'
             }}>
-              Available Routes
+              Available {routePreference.charAt(0).toUpperCase() + routePreference.slice(1)} Route
             </h2>
             
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '20px' }}>
@@ -1778,59 +1824,40 @@ const NavigationView = () => {
                 
                 <div style={{ 
                   display: 'flex', 
-                  justifyContent: 'space-between',
-                  marginTop: '16px'
+                  alignItems: 'center', 
+                  gap: '12px',
+                  marginBottom: '16px'
                 }}>
+                  <div style={{ 
+                    width: '48px',
+                    height: '48px',
+                    borderRadius: '50%',
+                    backgroundColor: '#F97316',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: 'white',
+                    fontSize: '24px'
+                  }}>
+                    ⏳
+                  </div>
                   <div>
-                    <div style={{ 
-                      fontSize: '12px',
-                      color: '#6b7280',
-                      marginBottom: '4px'
-                    }}>
-                      Next Signal
-                    </div>
-                    <div style={{ 
-                      fontSize: '16px',
+                    <h3 style={{ 
+                      margin: '0 0 4px 0', 
+                      fontSize: '18px',
                       fontWeight: '600',
                       color: '#1f2937'
                     }}>
-                      {nextSignal ? nextSignal.intersection_name : 'None detected'}
-                    </div>
-                  </div>
-                  <div>
-                    <div style={{ 
-                      fontSize: '12px',
-                      color: '#6b7280',
-                      marginBottom: '4px'
+                      {nextSignal ? `${nextSignal.current_state.color.toUpperCase()} signal in ${nextSignal.current_state.time_remaining}s` : 'No signals in range'}
+                    </h3>
+                    <p style={{ 
+                      margin: 0, 
+                      fontSize: '14px',
+                      color: '#6b7280'
                     }}>
-                      Status
-                    </div>
-                    <div style={{ 
-                      fontSize: '16px',
-                      fontWeight: '600',
-                      color: '#1f2937'
-                    }}>
-                      {nextSignal ? nextSignal.current_state.color : 'N/A'}
-                    </div>
+                      {nextSignal ? `${nextSignal.distanceMeters}m ahead` : ''}
+                    </p>
                   </div>
-                  {nextSignal && (
-                    <div>
-                      <div style={{ 
-                        fontSize: '12px',
-                        color: '#6b7280',
-                        marginBottom: '4px'
-                      }}>
-                        Distance
-                      </div>
-                      <div style={{ 
-                        fontSize: '16px',
-                        fontWeight: '600',
-                        color: '#1f2937'
-                      }}>
-                        {Math.round(nextSignal.distanceMeters || 0)}m
-                      </div>
-                    </div>
-                  )}
                 </div>
               </div>
               
@@ -1840,77 +1867,118 @@ const NavigationView = () => {
                 borderRadius: '12px',
                 border: '1px solid #E5E7EB'
               }}>
-                <h3 style={{ 
-                  margin: '0 0 16px 0', 
-                  fontSize: '18px',
-                  fontWeight: '600',
-                  color: '#1f2937'
+                <div style={{ 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  gap: '12px',
+                  marginBottom: '16px'
                 }}>
-                  Traffic Light Status
-                </h3>
+                  <div style={{ 
+                    width: '48px',
+                    height: '48px',
+                    borderRadius: '50%',
+                    backgroundColor: '#1D4ED8',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: 'white',
+                    fontSize: '24px'
+                  }}>
+                    📈
+                  </div>
+                  <div>
+                    <h3 style={{ 
+                      margin: '0 0 4px 0', 
+                      fontSize: '18px',
+                      fontWeight: '600',
+                      color: '#1f2937'
+                    }}>
+                      Trip Statistics
+                    </h3>
+                    <p style={{ 
+                      margin: 0, 
+                      fontSize: '14px',
+                      color: '#6b7280'
+                    }}>
+                      {tripStats.signalsOnGreen} green signals, {tripStats.signalsOnRed} red signals
+                    </p>
+                  </div>
+                </div>
                 
                 <div style={{ 
                   display: 'flex', 
-                  flexDirection: 'column',
-                  gap: '12px'
+                  alignItems: 'center', 
+                  gap: '12px',
+                  marginBottom: '16px'
                 }}>
-                  {trafficLights.slice(0, 3).map((light, index) => {
-                    // Calculate distance for display
-                    const referencePosition = userPosition || selectedFromCoords;
-                    const distance = referencePosition ? calculateDistance(referencePosition, light.coordinates) * 1000 : 0;
-                    
-                    return (
-                      <div 
-                        key={light.light_id}
-                        style={{ 
-                          display: 'flex', 
-                          justifyContent: 'space-between',
-                          alignItems: 'center',
-                          padding: '12px',
-                          backgroundColor: 'white',
-                          borderRadius: '8px',
-                          border: '1px solid #E5E7EB'
-                        }}
-                      >
-                        <div style={{ 
-                          fontSize: '14px',
-                          fontWeight: '500',
-                          color: '#1f2937'
-                        }}>
-                          {light.intersection_name}
-                        </div>
-                        <div style={{ 
-                          display: 'flex', 
-                          alignItems: 'center', 
-                          gap: '8px'
-                        }}>
-                          <div style={{ 
-                            width: '12px',
-                            height: '12px',
-                            borderRadius: '50%',
-                            backgroundColor: light.current_state.color === 'red' ? '#EF4444' : light.current_state.color === 'yellow' ? '#F59E0B' : '#10B981'
-                          }}>
-                          </div>
-                          <div style={{ 
-                            fontSize: '14px',
-                            fontWeight: '500',
-                            color: '#6b7280',
-                            minWidth: '60px'
-                          }}>
-                            {light.current_state.time_remaining}s
-                          </div>
-                          <div style={{ 
-                            fontSize: '14px',
-                            fontWeight: '500',
-                            color: '#6b7280',
-                            minWidth: '50px'
-                          }}>
-                            {Math.round(distance)}m
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
+                  <div style={{ 
+                    width: '48px',
+                    height: '48px',
+                    borderRadius: '50%',
+                    backgroundColor: '#EC4899',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: 'white',
+                    fontSize: '24px'
+                  }}>
+                    🌳
+                  </div>
+                  <div>
+                    <h3 style={{ 
+                      margin: '0 0 4px 0', 
+                      fontSize: '18px',
+                      fontWeight: '600',
+                      color: '#1f2937'
+                    }}>
+                      Pollution Exposure
+                    </h3>
+                    <p style={{ 
+                      margin: 0, 
+                      fontSize: '14px',
+                      color: '#6b7280'
+                    }}>
+                      {tripStats.pollutionExposure.toFixed(2)} AQI-hours
+                    </p>
+                  </div>
+                </div>
+                
+                <div style={{ 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  gap: '12px',
+                  marginBottom: '16px'
+                }}>
+                  <div style={{ 
+                    width: '48px',
+                    height: '48px',
+                    borderRadius: '50%',
+                    backgroundColor: '#EAB308',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: 'white',
+                    fontSize: '24px'
+                  }}>
+                    ⏳
+                  </div>
+                  <div>
+                    <h3 style={{ 
+                      margin: '0 0 4px 0', 
+                      fontSize: '18px',
+                      fontWeight: '600',
+                      color: '#1f2937'
+                    }}>
+                      Idling Time
+                    </h3>
+                    <p style={{ 
+                      margin: 0, 
+                      fontSize: '14px',
+                      color: '#6b7280'
+                    }}>
+                      {tripStats.idlingTime} seconds
+                    </p>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1926,101 +1994,98 @@ const NavigationView = () => {
                 isNavigating={isNavigating}
               />
             </div>
-            
-            {/* Eco-Score / Trip Health Report */}
-            {ecoScore && (
+          </div>
+        )}
+        {ecoScore && (
+          <div style={{ 
+            backgroundColor: '#F9FAFB',
+            padding: '20px',
+            borderRadius: '12px',
+            border: '1px solid #E5E7EB',
+            marginTop: '24px'
+          }}>
+            <h3 style={{ 
+              margin: '0 0 16px 0', 
+              fontSize: '18px',
+              fontWeight: '600',
+              color: '#1f2937'
+            }}>
+              📊 Trip Health Report
+            </h3>
+            <div style={{ 
+              display: 'grid', 
+              gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', 
+              gap: '16px'
+            }}>
               <div style={{ 
-                backgroundColor: '#F9FAFB',
-                padding: '20px',
-                borderRadius: '12px',
+                backgroundColor: 'white',
+                padding: '16px',
+                borderRadius: '8px',
                 border: '1px solid #E5E7EB',
-                marginTop: '24px'
+                textAlign: 'center'
               }}>
-                <h3 style={{ 
-                  margin: '0 0 16px 0', 
-                  fontSize: '18px',
-                  fontWeight: '600',
-                  color: '#1f2937'
-                }}>
-                  📊 Trip Health Report
-                </h3>
-                
                 <div style={{ 
-                  display: 'grid', 
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', 
-                  gap: '16px'
+                  fontSize: '24px',
+                  fontWeight: '700',
+                  color: '#10B981',
+                  marginBottom: '8px'
                 }}>
-                  <div style={{ 
-                    backgroundColor: 'white',
-                    padding: '16px',
-                    borderRadius: '8px',
-                    border: '1px solid #E5E7EB',
-                    textAlign: 'center'
-                  }}>
-                    <div style={{ 
-                      fontSize: '24px',
-                      fontWeight: '700',
-                      color: '#10B981',
-                      marginBottom: '8px'
-                    }}>
-                      {ecoScore.signalsOnGreen}
-                    </div>
-                    <div style={{ 
-                      fontSize: '14px',
-                      color: '#6b7280'
-                    }}>
-                      Signals on Green
-                    </div>
-                  </div>
-                  
-                  <div style={{ 
-                    backgroundColor: 'white',
-                    padding: '16px',
-                    borderRadius: '8px',
-                    border: '1px solid #E5E7EB',
-                    textAlign: 'center'
-                  }}>
-                    <div style={{ 
-                      fontSize: '24px',
-                      fontWeight: '700',
-                      color: '#EF4444',
-                      marginBottom: '8px'
-                    }}>
-                      {ecoScore.pollutionReduction}%
-                    </div>
-                    <div style={{ 
-                      fontSize: '14px',
-                      color: '#6b7280'
-                    }}>
-                      Pollution Reduction
-                    </div>
-                  </div>
-                  
-                  <div style={{ 
-                    backgroundColor: 'white',
-                    padding: '16px',
-                    borderRadius: '8px',
-                    border: '1px solid #E5E7EB',
-                    textAlign: 'center'
-                  }}>
-                    <div style={{ 
-                      fontSize: '24px',
-                      fontWeight: '700',
-                      color: '#3B82F6',
-                      marginBottom: '8px'
-                    }}>
-                      {ecoScore.fuelSaved}ml
-                    </div>
-                    <div style={{ 
-                      fontSize: '14px',
-                      color: '#6b7280'
-                    }}>
-                      Fuel Saved
-                    </div>
-                  </div>
+                  {ecoScore.signalsOnGreen}
+                </div>
+                <div style={{ 
+                  fontSize: '14px',
+                  color: '#6b7280'
+                }}>
+                  Signals on Green
                 </div>
               </div>
-            )}
+              
+              <div style={{ 
+                backgroundColor: 'white',
+                padding: '16px',
+                borderRadius: '8px',
+                border: '1px solid #E5E7EB',
+                textAlign: 'center'
+              }}>
+                <div style={{ 
+                  fontSize: '24px',
+                  fontWeight: '700',
+                  color: '#EF4444',
+                  marginBottom: '8px'
+                }}>
+                  {ecoScore.pollutionReduction}%
+                </div>
+                <div style={{ 
+                  fontSize: '14px',
+                  color: '#6b7280'
+                }}>
+                  Pollution Reduction
+                </div>
+              </div>
+              
+              <div style={{ 
+                backgroundColor: 'white',
+                padding: '16px',
+                borderRadius: '8px',
+                border: '1px solid #E5E7EB',
+                textAlign: 'center'
+              }}>
+                <div style={{ 
+                  fontSize: '24px',
+                  fontWeight: '700',
+                  color: '#3B82F6',
+                  marginBottom: '8px'
+                }}>
+                  {ecoScore.fuelSaved}ml
+                </div>
+                <div style={{ 
+                  fontSize: '14px',
+                  color: '#6b7280'
+                }}>
+                  Fuel Saved
+                </div>
+              </div>
+            </div>
           </div>
         )}
       </main>

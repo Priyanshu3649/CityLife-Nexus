@@ -426,41 +426,43 @@ class GoogleMapsService:
     ) -> List[RouteOption]:
         """
         Get multiple route options with different preferences
+        Only three route types: Fastest, Cleanest, and Safest
         """
         routes = []
         
-        # Get fastest route (default)
+        # Get fastest route (default - minimum travel time)
         fastest_directions = await self.get_directions(
             origin, destination, departure_time=departure_time
         )
         if fastest_directions:
             fastest_route = self.parse_route_from_directions(
-                fastest_directions, "fast"
+                fastest_directions, "fastest"
             )
             if fastest_route:
                 routes.append(fastest_route)
         
-        # Get route avoiding highways (potentially cleaner air)
+        # Get cleanest route (avoiding highways for potentially cleaner air)
         clean_directions = await self.get_directions(
             origin, destination, avoid=["highways"], departure_time=departure_time
         )
         if clean_directions:
             clean_route = self.parse_route_from_directions(
-                clean_directions, "clean"
+                clean_directions, "cleanest"
             )
             if clean_route:
                 routes.append(clean_route)
         
-        # Get route avoiding tolls (alternative option)
-        toll_free_directions = await self.get_directions(
-            origin, destination, avoid=["tolls"], departure_time=departure_time
+        # Get safest route (default route marked as safest)
+        # In a real implementation, this would use crime data, accident data, etc.
+        safest_directions = await self.get_directions(
+            origin, destination, departure_time=departure_time
         )
-        if toll_free_directions:
-            toll_free_route = self.parse_route_from_directions(
-                toll_free_directions, "toll_free"
+        if safest_directions:
+            safest_route = self.parse_route_from_directions(
+                safest_directions, "safest"
             )
-            if toll_free_route:
-                routes.append(toll_free_route)
+            if safest_route:
+                routes.append(safest_route)
         
         return routes
     

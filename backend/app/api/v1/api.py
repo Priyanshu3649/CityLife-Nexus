@@ -3,7 +3,7 @@ Main API router for CityLife Nexus
 """
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import sessions, routes, signals, aqi, emergency, analytics, health_impact, maps, websockets
+from app.api.v1.endpoints import sessions, routes, signals, aqi, emergency, analytics, health_impact, maps, websockets, traffic_predictor, parking, eco_score, community, interpolation, green_wave, incidents
 
 api_router = APIRouter()
 
@@ -17,3 +17,10 @@ api_router.include_router(analytics.router, prefix="/analytics", tags=["analytic
 api_router.include_router(health_impact.router, prefix="/health-impact", tags=["health-impact"])
 api_router.include_router(maps.router, prefix="/maps", tags=["google-maps"])
 api_router.include_router(websockets.router, prefix="/ws", tags=["websockets"])
+api_router.include_router(traffic_predictor.router, prefix="/traffic-predictor", tags=["traffic-predictor"])
+api_router.include_router(parking.router, prefix="/parking", tags=["parking"])
+api_router.include_router(eco_score.router, prefix="/eco-score", tags=["eco-score"])
+api_router.include_router(community.router, prefix="/community", tags=["community"])
+api_router.include_router(interpolation.router, prefix="/interpolation", tags=["interpolation"])
+api_router.include_router(green_wave.router, prefix="/green-wave", tags=["green-wave"])
+api_router.include_router(incidents.router, prefix="/incidents", tags=["incidents"])

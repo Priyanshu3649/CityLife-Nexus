@@ -86,8 +86,19 @@ class RouteOptimizer:
                     logger.error(f"Failed to enhance route {route.id}: {e}")
                     continue
             
-            # Sort routes by score (highest first)
-            enhanced_routes.sort(key=lambda r: r.route_score or 0, reverse=True)
+            # Sort routes by their specific criteria
+            if route_type == "fastest":
+                # Sort by minimum travel time
+                enhanced_routes.sort(key=lambda r: r.estimated_time_minutes)
+            elif route_type == "cleanest":
+                # Sort by minimum AQI (cleanest air quality)
+                enhanced_routes.sort(key=lambda r: r.average_aqi or 999)
+            elif route_type == "safest":
+                # Sort by highest safety score
+                enhanced_routes.sort(key=lambda r: r.route_score or 0, reverse=True)
+            else:
+                # Default sorting by score (highest first)
+                enhanced_routes.sort(key=lambda r: r.route_score or 0, reverse=True)
             
             return enhanced_routes
             
@@ -474,6 +485,7 @@ class RouteOptimizer:
     ) -> Optional[RouteComparison]:
         """
         Compare different route types and provide recommendations
+        Only three route types: Fastest, Cleanest, and Safest
         """
         try:
             # Get optimized routes for different types
@@ -487,28 +499,28 @@ class RouteOptimizer:
                 departure_time, "cleanest"
             )
             
-            balanced_routes = await self.optimize_route(
+            safest_routes = await self.optimize_route(
                 origin, destination, user_preferences, health_profile, 
-                departure_time, "balanced"
+                departure_time, "safest"
             )
             
             # Select best route from each category
             fast_route = fastest_routes[0] if fastest_routes else None
             clean_route = cleanest_routes[0] if cleanest_routes else None
-            balanced_route = balanced_routes[0] if balanced_routes else None
+            safest_route = safest_routes[0] if safest_routes else None
             
-            if not (fast_route and clean_route):
+            if not (fast_route and clean_route and safest_route):
                 return None
             
             # Determine recommendation based on user preferences
-            recommendation = self._determine_recommendation(
-                fast_route, clean_route, balanced_route, user_preferences
+            recommendation = self._determine_recommendation_for_three_routes(
+                fast_route, clean_route, safest_route, user_preferences
             )
             
             return RouteComparison(
                 fast_route=fast_route,
                 clean_route=clean_route,
-                balanced_route=balanced_route,
+                balanced_route=safest_route,  # Use safest route as the third option
                 recommendation=recommendation
             )
             
@@ -547,7 +559,7 @@ class RouteOptimizer:
                 "clean": clean_route.route_score or 0,
                 "balanced": balanced_route.route_score or 0
             }
-            return max(scores, key=scores.get)
+            return max(scores.keys(), key=lambda k: scores[k])
         
         # Compare time vs AQI difference
         time_diff_percent = abs(fast_route.estimated_time_minutes - clean_route.estimated_time_minutes) / fast_route.estimated_time_minutes
@@ -557,6 +569,44 @@ class RouteOptimizer:
             return "clean"
         else:
             return "fast"
+    
+    def _determine_recommendation_for_three_routes(
+        self,
+        fast_route: RouteOption,
+        clean_route: RouteOption,
+        safest_route: RouteOption,
+        user_preferences: Optional[UserPreferences]
+    ) -> str:
+        """
+        Determine which route to recommend based on preferences and scores for three routes
+        """
+        if not user_preferences:
+            # Default to safest route if no preferences
+            return "balanced"  # Using balanced as the safest route placeholder
+        
+        time_priority = user_preferences.prioritize_time
+        aqi_priority = user_preferences.prioritize_air_quality
+        safety_priority = user_preferences.prioritize_safety
+        
+        # Strong preference for time
+        if time_priority > 0.7:
+            return "fast"
+        
+        # Strong preference for air quality
+        if aqi_priority > 0.7:
+            return "clean"
+        
+        # Strong preference for safety
+        if safety_priority > 0.7:
+            return "balanced"  # Using balanced as the safest route placeholder
+        
+        # Compare scores across all three routes
+        scores = {
+            "fast": fast_route.route_score or 0,
+            "clean": clean_route.route_score or 0,
+            "balanced": safest_route.route_score or 0  # Using balanced as safest
+        }
+        return max(scores.keys(), key=lambda k: scores[k])
     
     async def calculate_route_efficiency_metrics(
         self,
